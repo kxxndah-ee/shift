@@ -99,47 +99,49 @@ def get_existing_urls() -> Set[str]:
 # =========================================================================
 # 1. 한국기자협회보 전수 크롤러 (전국 200여 회원 언론사 인사 망라)
 # =========================================================================
-def collect_journalist_articles(max_pages: int = 60, existing_urls: Set[str] = None) -> List[Dict[str, Any]]:
-    print(f"\n[1/4] 한국기자협회보 인사 섹션 수집 (1~{max_pages}페이지)...")
-    articles = []
-    seen = set(existing_urls or [])
-
-    for page in range(1, max_pages + 1):
-        url = f"https://www.journalist.or.kr/news/section_list_all.html?sec_no=63&page={page}"
-        try:
-            resp = session.get(url, timeout=6, verify=False)
-            if resp.status_code != 200:
-                break
-            soup = BeautifulSoup(resp.content, "html.parser")
-            anchors = soup.select("a[href*='article.html?no=']")
-            if not anchors:
-                break
-
-            for a in anchors:
-                href = a.get("href", "")
-                title = a.get_text(strip=True)
-                if not href or not title or len(title) < 3:
-                    continue
-                if not any(k in title for k in ["[인사]", "<인사>", "인사"]):
-                    continue
-                full_url = urljoin(url, href)
-                if full_url in seen:
-                    continue
-                seen.add(full_url)
-
-                articles.append({
+def fetch_journalist_page(page: int) -> List[Dict[str, Any]]:
+    url = f"https://www.journalist.or.kr/news/section_list_all.html?sec_no=63&page={page}"
+    try:
+        resp = session.get(url, timeout=6, verify=False)
+        if resp.status_code != 200:
+            return []
+        soup = BeautifulSoup(resp.content, "html.parser")
+        anchors = soup.select("a[href*='article.html?no=']")
+        if not anchors:
+            return []
+        items = []
+        for a in anchors:
+            h = a.get("href", "")
+            t = a.get_text(strip=True)
+            if not h or not t or len(t) < 3:
+                continue
+            if any(k in t for k in ["[인사]", "<인사>", "인사"]):
+                full_url = urljoin(url, h)
+                items.append({
                     "url": full_url,
-                    "title": title,
+                    "title": t,
                     "source": "한국기자협회",
                     "date": ""
                 })
+        return items
+    except Exception:
+        return []
 
-            if page % 10 == 0 or page == max_pages:
-                print(f"  기자협회 {page}페이지 완료 (누적 {len(articles)}건 후보 발견)")
-            time.sleep(0.1)
-        except Exception as e:
-            print(f"  기자협회 {page}페이지 오류: {e}")
-            break
+
+def collect_journalist_articles(max_pages: int = 475, existing_urls: Set[str] = None) -> List[Dict[str, Any]]:
+    print(f"\n[1/4] 한국기자협회보 20년 치 인사 섹션 병렬 전수 수집 (1~{max_pages}페이지)...")
+    articles = []
+    seen = set(existing_urls or [])
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        futs = {executor.submit(fetch_journalist_page, p): p for p in range(1, max_pages + 1)}
+        for future in concurrent.futures.as_completed(futs):
+            page_items = future.result()
+            for it in page_items:
+                u = it["url"]
+                if u not in seen:
+                    seen.add(u)
+                    articles.append(it)
 
     print(f"  -> 한국기자협회보 총 {len(articles)}건 발령 기사 확보")
     return articles
@@ -228,7 +230,7 @@ def scan_naver_historical_appointments(existing_urls: Set[str] = None) -> List[D
 
         for ds_peak, de_peak in windows:
             for outlet in TARGET_OUTLETS:
-                query = f'[인사] {outlet}'
+                query = f'"{outlet}" "[인사]"'
                 url = f"https://search.naver.com/search.naver?where=news&query={quote(query)}&sort=0&ds={ds_peak}&de={de_peak}&nso=so:r,p:from{ds_peak.replace('.', '')}to{de_peak.replace('.', '')},a:all"
                 try:
                     resp = session.get(url, timeout=3.5, verify=False)

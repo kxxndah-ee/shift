@@ -470,7 +470,12 @@ KNOWN_MEDIA_NAMES: set = {
     "기자협회", "한국기자협회", "기자협회보", "ebn", "EBN", "매경ax", "매경AX",
     "머니투데이", "머니투데이방송", "mtn", "MTN", "이코노미스트", "일간스포츠", "이데일리", "이데일리M", "이데일리m",
     "딜사이트", "인포스탁데일리", "소비자가만드는신문", "조세일보", "디지털데일리", "지디넷코리아",
-    "전자신문", "더구루", "뉴스락", "프레시안", "노컷뉴스", "쿠키뉴스", "세계비즈", "세계비즈앤스포츠월드"
+    "전자신문", "더구루", "뉴스락", "프레시안", "노컷뉴스", "쿠키뉴스", "세계비즈", "세계비즈앤스포츠월드",
+    "디지털타임스", "디지털타임즈", "디지털타임스사", "DT", "dt",
+    "강원도민일보", "강원도민일보사", "전북도민일보", "전북도민일보사", "전남일보", "충청투데이",
+    "OBS", "OBS경인TV", "obs", "BBS", "BBS불교방송", "bbs",
+    "코리아타임스", "코리아타임즈", "코리아헤럴드", "스포츠조선", "스포츠동아", "스포츠서울", "스포츠경향",
+    "시사저널", "시사저널e", "시사IN", "시사인", "신아일보", "경기일보", "경인일보", "중부일보"
 }
 
 NON_MEDIA_KEYWORDS: List[str] = [
@@ -494,12 +499,14 @@ def is_department_header(hdr: str) -> bool:
     if not hdr:
         return False
     h = hdr.strip()
+    if h in KNOWN_MEDIA_NAMES or any(km.lower() == h.lower() for km in KNOWN_MEDIA_NAMES):
+        return False
     if any(h.endswith(suffix) for suffix in ["실", "국", "부", "팀", "센터", "총괄", "본부", "파트", "데스크", "에디터석", "에디터"]):
         # 단, 언론사명 자체인 경우 제외 (예: 방송국 제외, 일보/신문 등)
-        if h in KNOWN_MEDIA_NAMES or any(h.endswith(m) for m in ["미디어그룹", "신문사", "방송사", "뉴스룸"]):
+        if any(h.endswith(m) for m in ["미디어그룹", "신문사", "방송사", "뉴스룸"]):
             return False
         return True
-    if any(k in h for k in ["편집국", "보도국", "논설위원", "경영지원", "인재문화", "마케팅", "디지털", "독자서비스", "독자권익", "사업본부"]):
+    if any(k in h for k in ["편집국", "보도국", "논설위원", "경영지원", "인재문화", "마케팅", "독자서비스", "독자권익", "사업본부"]):
         return True
     return False
 
@@ -511,10 +518,10 @@ def is_media_organization(name: str) -> bool:
     n = name.lower().strip()
     if n in ["2010년", "2011년", "제1", "미상", "온라인뉴스", "뉴스", "언론사", "기자", "본사", "지사", "편집국", "보도국"]:
         return False
-    if is_department_header(n):
-        return False
     if n in KNOWN_MEDIA_NAMES or any(km.lower() == n for km in KNOWN_MEDIA_NAMES):
         return True
+    if is_department_header(n):
+        return False
     # 직급명이나 직책명이 포함된 경우 언론사명이 아님
     if any(r in n for r in ["부장", "차장", "국장", "팀장", "소장", "실장", "본부장", "부문장", "총괄", "위원", "기자", "대표", "이사"]):
         return False
@@ -610,12 +617,15 @@ EXCLUDED_DEPARTMENT_KEYWORDS = [
 
 def is_excluded_department(dept_name: str) -> bool:
     """
-    기자/언론인 고유 업무와 무관한 방송사 예능, 드라마 등 비보도 프로그램 제작 부서를 식별하여 제외합니다.
+    기자/언론인 고유 업무와 무관한 방송사 예능, 드라마 등 비보도 프로그램 제작 부서 및 문장형 노이즈를 식별하여 제외합니다.
     """
     if not dept_name:
         return False
-    d = str(dept_name).replace(" ", "")
-    return any(kw in d for kw in EXCLUDED_DEPARTMENT_KEYWORDS)
+    d = str(dept_name).strip()
+    if len(d) > 25 or any(p in d for p in [".", "다.", "했다", "이다", "으로", "하며", "에서", "kg", "㎞", "톤", "프로젝트", "수주", "가정할", "이른다"]):
+        return True
+    d_clean = d.replace(" ", "")
+    return any(kw in d_clean for kw in EXCLUDED_DEPARTMENT_KEYWORDS)
 
 
 # ==========================================
@@ -687,7 +697,7 @@ class PersonnelRegexParser:
             return None
         if any(nmk in name for nmk in NON_MEDIA_KEYWORDS):
             return None
-        if name in cls.ACTION_CANDIDATES or name in ["임용", "보임", "임명", "승진", "전보", "전출", "전입", "파견", "선임", "채용", "영입", "이동", "전임", "보직", "선출", "위촉", "해임", "면직"]:
+        if name in cls.ACTION_CANDIDATES or name in ["임용", "보임", "임명", "승진", "전보", "전출", "전입", "파견", "선임", "채용", "영입", "이동", "전임", "보직", "선출", "위촉", "해임", "면직", "부서", "보직이동", "부서이동", "부서배치", "동정", "부음", "부고", "사령", "퇴임", "정년퇴임", "명예퇴임", "의원면직"]:
             return None
         if name in RANK_HIERARCHY or any(name == r for r in RANK_HIERARCHY):
             return None
@@ -3416,8 +3426,9 @@ class OnlineNewsTracker:
                 for g_alias in MEDIA_GROUP_ALIASES[media_clean][:2]:
                     q_list.append(f'"{g_alias}" "{name_clean}" 인사')
                     q_list.append(f'{g_alias} "{name_clean}" [인사]')
-            elif not media_clean.endswith(("신문", "방송", "뉴스", "통신", "일보", "경제")):
+            if media_clean and not media_clean.endswith(("신문", "방송", "뉴스", "통신", "일보", "타임스", "타임즈")):
                 q_list.append(f'"{media_clean}신문" "{name_clean}" 인사')
+                q_list.append(f'{media_clean}신문 "{name_clean}" [인사]')
             for q in q_list:
                 search_tasks.append((q, sy, ey, sort_type))
 
@@ -3992,9 +4003,6 @@ class MediaDatabase:
                 cnt = row[0] if row else 0
                 max_date = str(row[1]) if (row and row[1]) else ""
 
-                if not force and cnt >= 7000 and max_date >= "2026-01-01":
-                    return {"inserted_records": 0, "status": "already_up_to_date", "total_records": cnt}
-
                 with gzip.open(resolved_path, "rt", encoding="utf-8") as f:
                     seed_payload = json.load(f)
 
@@ -4008,6 +4016,9 @@ class MediaDatabase:
                     seed_changes = []
                 else:
                     return {"inserted_records": 0, "status": "invalid_seed_format"}
+
+                if not force and cnt >= len(seed_records) and max_date >= "2026-01-01":
+                    return {"inserted_records": 0, "status": "already_up_to_date", "total_records": cnt}
 
                 cursor.execute("SELECT pub_date, media, name, dept, rank_title FROM personnel_records")
                 existing_keys = set(cursor.fetchall())
