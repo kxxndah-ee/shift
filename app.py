@@ -806,6 +806,20 @@ with tab_search:
                         if any(is_same_media_company(d_clean, km) for km in KNOWN_MEDIA_NAMES) and not any(is_same_media_company(m_clean, km) for km in KNOWN_MEDIA_NAMES):
                             m_clean, d_clean = d_clean, m_clean
 
+                    # 부서명 또는 매체명에서 직급이 섞여 입력된 경우(예: '건설부동산 부장') 자동 분리
+                    if d_clean and not r_clean:
+                        for rk in ["논설위원", "전문기자", "본부장", "부국장", "국장", "부장", "차장", "팀장", "위원", "대표", "이사", "상무", "전무", "기자"]:
+                            if rk in d_clean:
+                                r_clean = rk
+                                d_clean = d_clean.replace(rk, "").strip()
+                                break
+                    if m_clean and not r_clean:
+                        for rk in ["논설위원", "전문기자", "본부장", "부국장", "국장", "부장", "차장", "팀장", "위원", "대표", "이사", "상무", "전무", "기자"]:
+                            if rk in m_clean:
+                                r_clean = rk
+                                m_clean = m_clean.replace(rk, "").strip()
+                                break
+
                     st.session_state["filter_media_val"] = m_clean
                     st.session_state["filter_dept_val"] = d_clean
                     st.session_state["filter_rank_val"] = r_clean

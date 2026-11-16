@@ -2730,7 +2730,8 @@ class OnlineNewsTracker:
         client_id: str = "",
         client_secret: str = "",
         stop_event: Optional[Any] = None,
-        full_history: bool = True
+        full_history: bool = True,
+        db_path: str = "media_tracker.db"
     ) -> Dict[str, Any]:
         """
         특정 기자의 최신(당일/당해) 온라인 인사 발령 기사를 실시간 고속 수집하여
@@ -2944,7 +2945,8 @@ class OnlineNewsTracker:
         client_id: str = "",
         client_secret: str = "",
         stop_event: Optional[Any] = None,
-        full_history: bool = True
+        full_history: bool = True,
+        db_path: str = "media_tracker.db"
     ) -> Dict[str, Any]:
         """
         특정 매체명, 부서명, 직급명의 최신(당일/당해) 온라인 [인사]/<인사> 기사를 실시간 고속 검색하여
@@ -2970,6 +2972,14 @@ class OnlineNewsTracker:
                 if any(is_same_media_company(parts[0], km) for km in KNOWN_MEDIA_NAMES) or parts[0] in KNOWN_MEDIA_NAMES:
                     media_clean = parts[0]
                     dept_clean = parts[1]
+
+        # dept_clean 내에 직급명(부장, 차장 등)이 포함된 경우 rank_clean으로 자동 분리
+        if dept_clean and not rank_clean:
+            for rnk_term in ["부장", "차장", "팀장", "국장", "부국장", "실장", "본부장", "에디터", "데스크", "기자"]:
+                if rnk_term in dept_clean:
+                    dept_clean = re.sub(rf"\b{rnk_term}\b|\s*{rnk_term}", "", dept_clean).strip()
+                    rank_clean = rnk_term
+                    break
 
         # 매체명과 부서명이 서로 바뀐 경우 자동 보정
         if dept_clean and not media_clean:
@@ -3005,77 +3015,108 @@ class OnlineNewsTracker:
         search_tasks = []
         for sy, ey, sort_type in intervals:
             q_list = []
+            alias_candidates = []
+            if media_clean in MEDIA_GROUP_ALIASES:
+                alias_candidates.extend(MEDIA_GROUP_ALIASES[media_clean][:4])
+            if media_clean and not media_clean.endswith(("신문", "방송", "뉴스", "통신", "일보")):
+                alias_candidates.append(f"{media_clean}신문")
+
             if media_clean and rank_clean and dept_clean:
                 q_list.extend([
-                    f'{media_clean} "{dept_clean}" "{rank_clean}" 인사',
+                    f'{media_clean} {dept_clean} {rank_clean}',
+                    f'{media_clean} {dept_clean}',
                     f'{media_clean} "{dept_clean}" [인사]',
                     f'{media_clean} "{rank_clean}" [인사]',
                     f'[인사] {media_clean}',
+                    f'<{인사}> {media_clean}',
                     f'{media_clean} [인사] 뉴스1',
                     f'{media_clean} [인사] 연합뉴스',
                 ])
-                if media_clean in MEDIA_GROUP_ALIASES:
-                    for g_alias in MEDIA_GROUP_ALIASES[media_clean][:2]:
-                        q_list.append(f'{g_alias} "{dept_clean}" "{rank_clean}" 인사')
+                for g_alias in alias_candidates:
+                    q_list.extend([
+                        f'[인사] {g_alias}',
+                        f'<{인사}> {g_alias}',
+                        f'{g_alias} [인사]',
+                        f'{g_alias} {dept_clean}',
+                        f'{g_alias} {dept_clean} {rank_clean}'
+                    ])
+                    if "건설" in dept_clean and "부동산" in dept_clean:
+                        q_list.extend([
+                            f'{g_alias} 부동산',
+                            f'{g_alias} 건설'
+                        ])
             elif media_clean and rank_clean:
                 q_list.extend([
-                    f'{media_clean} "{rank_clean}" [인사]',
-                    f'"{media_clean}" "{rank_clean}" 인사',
+                    f'{media_clean} {rank_clean} [인사]',
+                    f'{media_clean} {rank_clean} 인사',
                     f'[인사] {media_clean}',
+                    f'<{인사}> {media_clean}',
                     f'{media_clean} [인사] 뉴스1',
                     f'{media_clean} [인사] 연합뉴스',
                 ])
-                if media_clean in MEDIA_GROUP_ALIASES:
-                    for g_alias in MEDIA_GROUP_ALIASES[media_clean][:2]:
-                        q_list.append(f'{g_alias} "{rank_clean}" [인사]')
-                        q_list.append(f'"{g_alias}" "{rank_clean}" 인사')
+                for g_alias in alias_candidates:
+                    q_list.extend([
+                        f'[인사] {g_alias}',
+                        f'<{인사}> {g_alias}',
+                        f'{g_alias} [인사]',
+                        f'{g_alias} {rank_clean}'
+                    ])
             elif media_clean and dept_clean:
                 q_list.extend([
-                    f'{media_clean} "{dept_clean}" [인사]',
-                    f'"{media_clean}" "{dept_clean}" 인사',
+                    f'{media_clean} {dept_clean} [인사]',
+                    f'{media_clean} {dept_clean} 인사',
                     f'[인사] {media_clean}',
+                    f'<{인사}> {media_clean}',
                     f'{media_clean} [인사] 뉴스1',
                     f'{media_clean} [인사] 연합뉴스',
                 ])
-                if media_clean in MEDIA_GROUP_ALIASES:
-                    for g_alias in MEDIA_GROUP_ALIASES[media_clean][:2]:
-                        q_list.append(f'{g_alias} "{dept_clean}" [인사]')
-                        q_list.append(f'"{g_alias}" "{dept_clean}" 인사')
+                for g_alias in alias_candidates:
+                    q_list.extend([
+                        f'[인사] {g_alias}',
+                        f'<{인사}> {g_alias}',
+                        f'{g_alias} [인사]',
+                        f'{g_alias} {dept_clean}'
+                    ])
+                    if "건설" in dept_clean and "부동산" in dept_clean:
+                        q_list.extend([
+                            f'{g_alias} 부동산',
+                            f'{g_alias} 건설'
+                        ])
             elif media_clean:
                 q_list.extend([
-                    f'"{media_clean}" 인사',
+                    f'{media_clean} 인사',
                     f'[인사] {media_clean}',
-                    f'"{media_clean}" [인사]',
+                    f'<{인사}> {media_clean}',
+                    f'{media_clean} [인사]',
                     f'{media_clean} [인사] 연합뉴스',
                     f'{media_clean} [인사] 뉴스1',
                 ])
-                if media_clean in MEDIA_GROUP_ALIASES:
-                    for g_alias in MEDIA_GROUP_ALIASES[media_clean][:4]:
-                        q_list.append(f'"{g_alias}" 인사')
-                        q_list.append(f'[인사] {g_alias}')
-                        q_list.append(f'"{g_alias}" [인사]')
-                elif not media_clean.endswith(("신문", "방송", "뉴스", "통신", "일보", "경제")):
-                    q_list.append(f'"{media_clean}신문" 인사')
-                    q_list.append(f'[인사] {media_clean}신문')
+                for g_alias in alias_candidates:
+                    q_list.extend([
+                        f'{g_alias} 인사',
+                        f'[인사] {g_alias}',
+                        f'<{인사}> {g_alias}',
+                        f'{g_alias} [인사]'
+                    ])
             elif rank_clean and dept_clean:
                 q_list.extend([
-                    f'"{dept_clean}" "{rank_clean}" [인사] 뉴스1',
-                    f'"{dept_clean}" "{rank_clean}" [인사] 연합뉴스',
+                    f'{dept_clean} {rank_clean} [인사] 뉴스1',
+                    f'{dept_clean} {rank_clean} [인사] 연합뉴스',
                     f'{dept_clean} [인사] 중앙일보',
                 ])
             elif rank_clean:
                 # 오직 직급(부장, 차장 등)만 검색한 경우 언론사 및 뉴스1/연합뉴스/중앙일보 타깃
                 q_list.extend([
-                    f'"{rank_clean}" [인사] 뉴스1',
-                    f'"{rank_clean}" [인사] 연합뉴스',
-                    f'"{rank_clean}" [인사] 중앙일보',
-                    f'신문사 "{rank_clean}" [인사]',
+                    f'{rank_clean} [인사] 뉴스1',
+                    f'{rank_clean} [인사] 연합뉴스',
+                    f'{rank_clean} [인사] 중앙일보',
+                    f'신문사 {rank_clean} [인사]',
                 ])
             elif dept_clean:
                 q_list.extend([
-                    f'"{dept_clean}" [인사] 뉴스1',
-                    f'"{dept_clean}" [인사] 연합뉴스',
-                    f'"{dept_clean}" [인사] 중앙일보',
+                    f'{dept_clean} [인사] 뉴스1',
+                    f'{dept_clean} [인사] 연합뉴스',
+                    f'{dept_clean} [인사] 중앙일보',
                 ])
 
             for q in q_list:
@@ -3325,7 +3366,8 @@ class OnlineNewsTracker:
         client_id: str = "",
         client_secret: str = "",
         stop_event: Optional[Any] = None,
-        full_history: bool = True
+        full_history: bool = True,
+        db_path: str = "media_tracker.db"
     ) -> Dict[str, Any]:
         """
         특정 매체명 및 인물명의 최신(당일/당해) 온라인 [인사]/<인사> 기사를 실시간 검색하여
@@ -3583,7 +3625,8 @@ class OnlineNewsTracker:
         cls, 
         max_articles: int = 15,
         client_id: str = "",
-        client_secret: str = ""
+        client_secret: str = "",
+        db_path: str = "media_tracker.db"
     ) -> Dict[str, Any]:
         """최신 온라인 인사 기사 전문을 대량 수집하여 파싱 및 DB에 등록합니다."""
         arts = cls.search_online_articles("[인사]", max_items=max_articles, client_id=client_id, client_secret=client_secret)
@@ -3627,7 +3670,8 @@ class OnlineNewsTracker:
         target_date: str = "",
         max_articles: int = 25,
         client_id: str = "",
-        client_secret: str = ""
+        client_secret: str = "",
+        db_path: str = "media_tracker.db"
     ) -> Dict[str, Any]:
         """
         당일(또는 지정된 일자)의 공식 [인사]/<인사> 기사를 실시간 크롤링하여
@@ -4351,6 +4395,14 @@ class MediaDatabase:
                 if any(is_same_media_company(parts[0], km) for km in KNOWN_MEDIA_NAMES) or parts[0] in KNOWN_MEDIA_NAMES:
                     media, dept = parts[0], parts[1]
 
+        # dept 내에 직급명(부장, 차장 등)이 포함된 경우 rank로 자동 분리
+        if dept and not rank:
+            for rnk_term in ["부장", "차장", "팀장", "국장", "부국장", "실장", "본부장", "에디터", "데스크", "기자"]:
+                if rnk_term in dept:
+                    dept = re.sub(rf"\b{rnk_term}\b|\s*{rnk_term}", "", dept).strip()
+                    rank = rnk_term
+                    break
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
             query = "SELECT DISTINCT r.* FROM reporters r WHERE 1=1"
@@ -4422,9 +4474,9 @@ class MediaDatabase:
 
             if dept and rank:
                 d_pr_sql = "(pr.dept LIKE ? OR pr.dept LIKE ? OR pr.dept LIKE ?)" if is_const_re else "pr.dept LIKE ?"
-                d_pr_p = ["%건설부동산%", "%건설부%", "%부동산부%"] if is_const_re else [f"%{dept}%"]
+                d_pr_p = ["%건설부동산%", "%건설%", "%부동산%"] if is_const_re else [f"%{dept}%"]
                 d_cur_sql = "(r.current_dept LIKE ? OR r.current_dept LIKE ? OR r.current_dept LIKE ?)" if is_const_re else "r.current_dept LIKE ?"
-                d_cur_p = ["%건설부동산%", "%건설부%", "%부동산부%"] if is_const_re else [f"%{dept}%"]
+                d_cur_p = ["%건설부동산%", "%건설%", "%부동산%"] if is_const_re else [f"%{dept}%"]
 
                 if is_rep_search:
                     query += f""" AND (
@@ -4478,9 +4530,9 @@ class MediaDatabase:
                     params.append(f"%{rank}%")
             elif dept:
                 d_pr_sql = "(pr.dept LIKE ? OR pr.dept LIKE ? OR pr.dept LIKE ?)" if is_const_re else "pr.dept LIKE ?"
-                d_pr_p = ["%건설부동산%", "%건설부%", "%부동산부%"] if is_const_re else [f"%{dept}%"]
+                d_pr_p = ["%건설부동산%", "%건설%", "%부동산%"] if is_const_re else [f"%{dept}%"]
                 d_cur_sql = "(r.current_dept LIKE ? OR r.current_dept LIKE ? OR r.current_dept LIKE ?)" if is_const_re else "r.current_dept LIKE ?"
-                d_cur_p = ["%건설부동산%", "%건설부%", "%부동산부%"] if is_const_re else [f"%{dept}%"]
+                d_cur_p = ["%건설부동산%", "%건설%", "%부동산%"] if is_const_re else [f"%{dept}%"]
 
                 query += f""" AND (
                     EXISTS (
@@ -4580,6 +4632,14 @@ class MediaDatabase:
                 if any(is_same_media_company(parts[0], km) for km in KNOWN_MEDIA_NAMES) or parts[0] in KNOWN_MEDIA_NAMES:
                     media, dept = parts[0], parts[1]
 
+        # dept 내에 직급명(부장, 차장 등)이 포함된 경우 rank로 자동 분리
+        if dept and not rank:
+            for rnk_term in ["부장", "차장", "팀장", "국장", "부국장", "실장", "본부장", "에디터", "데스크", "기자"]:
+                if rnk_term in dept:
+                    dept = re.sub(rf"\b{rnk_term}\b|\s*{rnk_term}", "", dept).strip()
+                    rank = rnk_term
+                    break
+
         with self.get_connection() as conn:
             cursor = conn.cursor()
             query = "SELECT * FROM personnel_records WHERE 1=1"
@@ -4595,7 +4655,7 @@ class MediaDatabase:
                 clean_d = dept.strip()
                 if "건설" in clean_d and "부동산" in clean_d:
                     query += " AND (dept LIKE ? OR dept LIKE ? OR dept LIKE ?)"
-                    params.extend(["%건설부동산%", "%건설부%", "%부동산부%"])
+                    params.extend(["%건설부동산%", "%건설%", "%부동산%"])
                 else:
                     query += " AND dept LIKE ?"
                     params.append(f"%{dept}%")

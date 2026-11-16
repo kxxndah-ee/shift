@@ -201,7 +201,7 @@ TARGET_OUTLETS = [
     # 주요 전국 일간지
     "조선일보", "동아일보", "경향신문", "한겨레", "서울신문", "한국일보", "세계일보", "국민일보", "문화일보",
     # 주요 경제지
-    "한국경제", "서울경제", "아시아경제", "헤럴드경제", "파이낸셜뉴스", "아주경제", "이데일리", "머니투데이", "전자신문", "디지털타임스",
+    "한국경제", "한국경제신문", "매일경제", "매일경제신문", "서울경제", "서울경제신문", "아시아경제", "헤럴드경제", "파이낸셜뉴스", "아주경제", "이데일리", "머니투데이", "전자신문", "디지털타임스",
     # 지상파 및 보도/종편 방송사
     "KBS", "MBC", "SBS", "YTN", "연합뉴스TV", "JTBC", "MBN", "채널A", "TV조선", "OBS", "CBS", "BBS",
     # 유력 지역 일간지
@@ -220,36 +220,39 @@ def scan_naver_historical_appointments(existing_urls: Set[str] = None) -> List[D
     for yr in reversed(years):
         year_articles = 0
 
-        # 연말/연초 정기인사 피크 윈도우 (12월 15일 ~ 1월 31일)
-        ds_peak = f"{yr}.12.15"
-        de_peak = f"{yr+1}.01.31" if yr < 2026 else f"{yr}.12.31"
+        # 연말/연초 정기인사 윈도우 (12월 15일 ~ 1월 31일) 및 경제지/주총 후 봄 정기인사 윈도우 (3월 1일 ~ 4월 15일)
+        windows = [
+            (f"{yr}.12.15", f"{yr+1}.01.31" if yr < 2026 else f"{yr}.12.31"),
+            (f"{yr}.03.01", f"{yr}.04.15")
+        ]
 
-        for outlet in TARGET_OUTLETS:
-            query = f'[인사] {outlet}'
-            url = f"https://search.naver.com/search.naver?where=news&query={quote(query)}&sort=0&ds={ds_peak}&de={de_peak}&nso=so:r,p:from{ds_peak.replace('.', '')}to{de_peak.replace('.', '')},a:all"
-            try:
-                resp = session.get(url, timeout=3.5, verify=False)
-                if resp.status_code == 200:
-                    soup = BeautifulSoup(resp.content, "html.parser")
-                    tit_elems = soup.select(".news_tit, a.W5fYO2_0xMDeLrlx, a[href*='articleView'], a[href*='article']")
-                    for a in tit_elems:
-                        h = a.get("href", "")
-                        t = a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
-                        if not h or not t or h in seen:
-                            continue
-                        if not any(k in t for k in ["[인사]", "<인사>", "인사"]):
-                            continue
-                        seen.add(h)
-                        articles.append({
-                            "url": h,
-                            "title": t,
-                            "source": outlet,
-                            "date": f"{yr}-12-31"
-                        })
-                        year_articles += 1
-                time.sleep(0.05)
-            except Exception:
-                pass
+        for ds_peak, de_peak in windows:
+            for outlet in TARGET_OUTLETS:
+                query = f'[인사] {outlet}'
+                url = f"https://search.naver.com/search.naver?where=news&query={quote(query)}&sort=0&ds={ds_peak}&de={de_peak}&nso=so:r,p:from{ds_peak.replace('.', '')}to{de_peak.replace('.', '')},a:all"
+                try:
+                    resp = session.get(url, timeout=3.5, verify=False)
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.content, "html.parser")
+                        tit_elems = soup.select(".news_tit, a.W5fYO2_0xMDeLrlx, a[href*='articleView'], a[href*='article']")
+                        for a in tit_elems:
+                            h = a.get("href", "")
+                            t = a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
+                            if not h or not t or h in seen:
+                                continue
+                            if not any(k in t for k in ["[인사]", "<인사>", "인사"]):
+                                continue
+                            seen.add(h)
+                            articles.append({
+                                "url": h,
+                                "title": t,
+                                "source": outlet,
+                                "date": f"{yr}-12-31"
+                            })
+                            year_articles += 1
+                    time.sleep(0.05)
+                except Exception:
+                    pass
 
         print(f"  >> {yr}년도 정기인사 스캔: {year_articles}건 신규 기사 발견 (누적 {len(articles)}건)")
 
