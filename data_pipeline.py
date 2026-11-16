@@ -164,7 +164,13 @@ STOPWORDS = {
     "카톡", "이메일", "제보", "문의", "게재", "연락처", "포함", "담당자", "저작권",
     "무단전재", "재배포", "신문사", "제보는", "산업국", "중앙신문", "경향신문", "한국정경",
     "서울경제", "한겨레", "조선일보", "동아일보", "연합뉴스", "뉴스1", "뉴시스",
-    "감사팀", "감사실", "법무실", "기획실", "비서실", "비서실장", "인사팀", "총무팀", "편집장", "지국장", "논설위원"
+    "감사팀", "감사실", "법무실", "기획실", "비서실", "비서실장", "인사팀", "총무팀", "편집장", "지국장", "논설위원",
+    # 웹 포털/뉴스 사이트 하단 공유 및 UI 버튼 노이즈 배제
+    "공유하기", "카카오톡", "페이스북", "네이버", "구독", "광고", "구독중", "이전", "다음", "송고",
+    "밴드", "프린트", "본문", "글자", "크기", "조정", "닫기", "댓글", "좋아요", "슬퍼요",
+    "화나요", "후속요청", "국내", "최대", "원스톱", "콘텐츠", "플랫폼", "함께", "보면", "좋은",
+    "데이블", "읽기", "후원링크", "다양한", "주제별", "맞춤", "추천", "북마크", "메신저", "복사",
+    "글자크기", "폰트", "공유", "제공", "연합"
 }
 
 MEDIA_GROUP_ALIASES: Dict[str, List[str]] = {
@@ -257,7 +263,18 @@ def normalize_media_name(raw_name: str) -> str:
     if name.endswith("사") and len(name) >= 3 and not name.endswith("통신사"):
         name = name[:-1]
 
-    # 4. 주요 언론사 매핑 및 표준화 규칙
+    n_compact = name.replace(" ", "").lower()
+
+    # 방송/케이블/자회사 계열사 분리 우선 처리 (신문사와 자회사/방송사 혼동 방지)
+    if "한국경제tv" in n_compact or "한경tv" in n_compact or "한국경제방송" in n_compact: return "한국경제TV"
+    if "매일경제tv" in n_compact or "매경tv" in n_compact: return "매일경제TV"
+    if "mbn" in n_compact: return "MBN"
+    if "머니투데이방송" in n_compact or "mtn" in n_compact or "머니투데이tv" in n_compact: return "머니투데이방송"
+    if "연합뉴스tv" in n_compact: return "연합뉴스TV"
+    if "tv조선" in n_compact: return "TV조선"
+    if "채널a" in n_compact: return "채널A"
+    if "jtbc" in n_compact: return "JTBC"
+
     if "더벨" in name: return "더벨"
     if "팍스넷" in name: return "팍스넷뉴스"
     if "비즈니스워치" in name or "비즈워치" in name: return "비즈워치"
@@ -283,8 +300,7 @@ def normalize_media_name(raw_name: str) -> str:
     if "아시아경제" in name or name in ["아경"]: return "아시아경제"
     if "헤럴드" in name: return "헤럴드경제"
     if "파이낸셜" in name: return "파이낸셜뉴스"
-    if "머니투데이방송" in name or "mtn" in name.lower(): return "머니투데이방송"
-    if "머니투데이" in name or "머투" in name: return "머니투데이"
+    if "머니투데이" in n_compact or "머투" in n_compact: return "머니투데이"
     if "이데일리m" in name.lower() or "이데일리 m" in name.lower(): return "이데일리M"
     if "이코노미스트" in name: return "이코노미스트"
     if "일간스포츠" in name: return "일간스포츠"
@@ -319,19 +335,69 @@ def normalize_media_name(raw_name: str) -> str:
 
 
 def is_same_media_company(m1: str, m2: str) -> bool:
-    """두 언론사명이 동일 언론사 또는 계열사/그룹인지 판별합니다."""
+    """
+    두 언론사명이 실질적으로 동일한 단일 언론사인지 판별합니다.
+    신문사와 계열 방송사(예: 머니투데이 vs 머니투데이방송)는 엄격히 분리합니다.
+    """
     if not m1 or not m2:
         return False
-    n1 = normalize_media_name(m1)
-    n2 = normalize_media_name(m2)
+    n1 = normalize_media_name(m1).strip()
+    n2 = normalize_media_name(m2).strip()
     if n1 == n2:
         return True
-    if n1 in n2 or n2 in n1:
-        return True
+
+    # 1. 신문사와 계열 방송사/자회사 간 엄격 분리 (상호 배타적 처리)
+    # [머니투데이(신문) vs 머니투데이방송(MTN)]
+    is_n1_mt = (n1 == "머니투데이" or n1 in ["머투", "머니투데이그룹", "머니투데이미디어", "머니투데이신문"])
+    is_n2_mt = (n2 == "머니투데이" or n2 in ["머투", "머니투데이그룹", "머니투데이미디어", "머니투데이신문"])
+    is_n1_mtn = (n1 == "머니투데이방송" or "방송" in n1 or n1.lower() == "mtn" or "mtn" in n1.lower())
+    is_n2_mtn = (n2 == "머니투데이방송" or "방송" in n2 or n2.lower() == "mtn" or "mtn" in n2.lower())
+    if (is_n1_mt and is_n2_mtn) or (is_n2_mt and is_n1_mtn):
+        return False
+
+    # [한국경제 vs 한국경제TV]
+    is_n1_hk = (n1 == "한국경제" or n1 in ["한경", "한경닷컴"])
+    is_n2_hk = (n2 == "한국경제" or n2 in ["한경", "한경닷컴"])
+    is_n1_hktv = ("tv" in n1.lower() or "방송" in n1) and "한국경제" in n1
+    is_n2_hktv = ("tv" in n2.lower() or "방송" in n2) and "한국경제" in n2
+    if (is_n1_hk and is_n2_hktv) or (is_n2_hk and is_n1_hktv):
+        return False
+
+    # [매일경제 vs MBN / 매일경제TV]
+    is_n1_mk = (n1 == "매일경제" or n1 in ["매경", "매일경제신문"])
+    is_n2_mk = (n2 == "매일경제" or n2 in ["매경", "매일경제신문"])
+    is_n1_mbn = (n1.lower() == "mbn" or "매일경제tv" in n1.lower() or "mbn" in n1.lower())
+    is_n2_mbn = (n2.lower() == "mbn" or "매일경제tv" in n2.lower() or "mbn" in n2.lower())
+    if (is_n1_mk and is_n2_mbn) or (is_n2_mk and is_n1_mbn):
+        return False
+
+    # [조선일보 vs TV조선]
+    if (n1 == "조선일보" and "tv조선" in n2.lower()) or (n2 == "조선일보" and "tv조선" in n1.lower()):
+        return False
+
+    # [동아일보 vs 채널A]
+    if (n1 == "동아일보" and "채널a" in n2.lower()) or (n2 == "동아일보" and "채널a" in n1.lower()):
+        return False
+
+    # [중앙일보 vs JTBC]
+    if (n1 == "중앙일보" and "jtbc" in n2.lower()) or (n2 == "중앙일보" and "jtbc" in n1.lower()):
+        return False
+
+    # 2. 명시적 별칭 매핑(MEDIA_GROUP_ALIASES) 검사 (동일 그룹 내 별칭인지 여부)
     for base_name, aliases in MEDIA_GROUP_ALIASES.items():
         all_group = [base_name] + aliases
-        if any(normalize_media_name(a) == n1 for a in all_group) and any(normalize_media_name(a) == n2 for a in all_group):
+        n_group = [normalize_media_name(a) for a in all_group]
+        if n1 in n_group and n2 in n_group:
             return True
+
+    # 3. 단순 접미사 차이 검사 (단, 방송/TV 키워드가 섞인 경우 배제)
+    suffixes = ["신문사", "신문", "일보사", "일보", "사", "닷컴", "미디어"]
+    for s in suffixes:
+        c1 = n1.replace(s, "")
+        c2 = n2.replace(s, "")
+        if c1 and c1 == c2 and not any(kw in n1 or kw in n2 for kw in ["방송", "tv", "TV", "mtn", "MTN", "mbn", "MBN"]):
+            return True
+
     return False
 
 
@@ -362,6 +428,7 @@ KNOWN_MEDIA_NAMES: set = {
     "한국일보", "문화일보", "세계일보", "국민일보", "서울신문", "내일신문",
     "ytn", "YTN", "kbs", "KBS", "mbc", "MBC", "sbs", "SBS", "jtbc", "JTBC", "mbn", "MBN",
     "tv조선", "TV조선", "채널a", "채널A", "연합뉴스TV", "연합뉴스tv",
+    "한국경제TV", "한국경제tv", "한경TV", "한경tv", "매일경제TV", "매일경제tv", "매경TV", "매경tv",
     "한경", "매경", "서경", "아경", "매일경제", "매일경제신문", "매일경제신문사", "매경미디어그룹", "매경미디어", "매경닷컴", "매경비즈", "한국경제", "서울경제", "아시아경제", "헤럴드경제",
     "아시아투데이", "파이낸셜뉴스", "이투데이", "뉴스토마토", "머니s", "머니S", "블로터", "더벨", "비즈한국",
     "비즈니스워치", "비즈워치", "글로벌이코노믹", "신아일보", "아주경제", "브릿지경제", "한국정경신문", "스마트에프엔",
@@ -1045,17 +1112,25 @@ class PersonnelTrackerEngine:
             if not is_media_organization(r.get("media", "")) or (r.get("article_title") and not is_personnel_article_title(r.get("article_title", ""))) or is_excluded_department(r.get("dept", "")):
                 continue
             r_copy = dict(r)
-            # 매체명 정규화
+            # 매체명 정규화 (머니투데이와 머니투데이방송 엄격 분리)
             art_t = r_copy.get("article_title", "")
             raw_t = r_copy.get("raw_text", "")
-            if "머니투데이방송" in art_t or "MTN" in art_t or "머니투데이방송" in raw_t or "MTN" in raw_t:
+            med = r_copy.get("media", "")
+            med_norm = normalize_media_name(med)
+            if med_norm == "머니투데이방송" or "머니투데이방송" in med or "mtn" in med.lower():
                 r_copy["media"] = "머니투데이방송"
-            elif "이코노미스트" in art_t or "이코노미스트" in raw_t:
+            elif med_norm == "머니투데이" or med in ["머투", "머니투데이", "머니투데이신문", "머니투데이그룹", "머니투데이미디어"]:
+                r_copy["media"] = "머니투데이"
+            elif med_norm in ["비언론사", "온라인뉴스", "미상", ""] and ("머니투데이방송" in art_t or "MTN" in art_t):
+                r_copy["media"] = "머니투데이방송"
+            elif med_norm in ["비언론사", "온라인뉴스", "미상", ""] and "머니투데이" in art_t:
+                r_copy["media"] = "머니투데이"
+            elif med_norm == "이코노미스트" or "이코노미스트" in med or "이코노미스트" in art_t:
                 r_copy["media"] = "이코노미스트"
-            elif "일간스포츠" in art_t or "일간스포츠" in raw_t:
+            elif med_norm == "일간스포츠" or "일간스포츠" in med or "일간스포츠" in art_t:
                 r_copy["media"] = "일간스포츠"
             else:
-                r_copy["media"] = normalize_media_name(r_copy.get("media", ""))
+                r_copy["media"] = med_norm
 
             # 부서명 따옴표/반복부호 정제
             d_str = re.sub(r'^[△▲▷▶○●■□◆◇◈▣◎⊙◐◑·ㆍ\-\*―━“"”’‘\'〃\s]+|[“"”’‘\'〃\s]+$', '', str(r_copy.get("dept", ""))).strip()
@@ -2642,13 +2717,14 @@ class OnlineNewsTracker:
 
         # 복합 검색어 자동 분리 (예: media="뉴스1 건설부동산" -> media="뉴스1", dept="건설부동산")
         if media_clean and not dept_clean:
-            for km in sorted(KNOWN_MEDIA_NAMES, key=len, reverse=True):
-                if media_clean.startswith(km) and len(media_clean) > len(km):
-                    remainder = media_clean[len(km):].strip()
-                    if remainder:
-                        media_clean = km
-                        dept_clean = remainder
-                        break
+            if media_clean not in KNOWN_MEDIA_NAMES and normalize_media_name(media_clean) not in KNOWN_MEDIA_NAMES:
+                for km in sorted(KNOWN_MEDIA_NAMES, key=len, reverse=True):
+                    if media_clean.startswith(km) and len(media_clean) > len(km):
+                        remainder = media_clean[len(km):].strip()
+                        if remainder and (remainder in ["건설부동산", "산업부", "경제부", "정치부", "사회부", "금융부", "증권부"] or remainder.endswith(("부", "팀", "국", "실", "센터", "단", "소")) or " " in media_clean):
+                            media_clean = km
+                            dept_clean = remainder
+                            break
             if not dept_clean and " " in media_clean:
                 parts = media_clean.split(None, 1)
                 if any(is_same_media_company(parts[0], km) for km in KNOWN_MEDIA_NAMES) or parts[0] in KNOWN_MEDIA_NAMES:
@@ -2821,6 +2897,18 @@ class OnlineNewsTracker:
                         allowed_media_tokens.append(base)
                         allowed_media_tokens.extend(alist)
                 allowed_media_tokens = list(set(allowed_media_tokens))
+
+                # 머니투데이 vs 머니투데이방송 완벽 격리
+                if media_clean == "머니투데이":
+                    allowed_media_tokens = [t for t in allowed_media_tokens if "방송" not in t and "mtn" not in t.lower()]
+                    # 제목이 명백한 머니투데이방송 기사 배제
+                    if any(k in art.get("title", "") for k in ["머니투데이방송", "MTN", "mtn"]) and not any(k in art.get("title", "") for k in ["외", "종합", "등"]):
+                        return None
+                elif media_clean in ["머니투데이방송", "MTN"] or media_clean.lower() == "mtn":
+                    allowed_media_tokens = ["머니투데이방송", "MTN", "mtn"]
+                    if "머니투데이" in art.get("title", "") and not any(k in art.get("title", "") for k in ["방송", "MTN", "mtn"]) and not any(k in art.get("title", "") for k in ["외", "종합", "등"]):
+                        return None
+
                 if media_clean and not any(tok in body or tok in art.get("title", "") for tok in allowed_media_tokens):
                     return None
                 if not media_clean and dept_clean and dept_clean not in body and dept_clean not in art.get("title", ""):
@@ -2867,7 +2955,7 @@ class OnlineNewsTracker:
                     is_target_media = True
                 elif is_same_media_company(media_clean, rec_med):
                     is_target_media = True
-                    r["media"] = normalize_media_name(media_clean)
+                    r["media"] = normalize_media_name(rec_med)
                 elif rec_med in ["온라인뉴스", "미상", ""] and any(tok in art.get("title", "") for tok in allowed_media_tokens) and not any(kw in art.get("title", "") for kw in ["종합", "외", "등", "동향"]):
                     is_target_media = True
                     r["media"] = normalize_media_name(media_clean)
@@ -3095,6 +3183,18 @@ class OnlineNewsTracker:
                         allowed_media_tokens.append(base)
                         allowed_media_tokens.extend(alist)
                 allowed_media_tokens = list(set(allowed_media_tokens))
+
+                # 머니투데이 vs 머니투데이방송 완벽 격리
+                if media_clean == "머니투데이":
+                    allowed_media_tokens = [t for t in allowed_media_tokens if "방송" not in t and "mtn" not in t.lower()]
+                    # 제목이 명백한 머니투데이방송 기사 배제
+                    if any(k in art.get("title", "") for k in ["머니투데이방송", "MTN", "mtn"]) and not any(k in art.get("title", "") for k in ["외", "종합", "등"]):
+                        return None
+                elif media_clean in ["머니투데이방송", "MTN"] or media_clean.lower() == "mtn":
+                    allowed_media_tokens = ["머니투데이방송", "MTN", "mtn"]
+                    if "머니투데이" in art.get("title", "") and not any(k in art.get("title", "") for k in ["방송", "MTN", "mtn"]) and not any(k in art.get("title", "") for k in ["외", "종합", "등"]):
+                        return None
+
                 if media_clean and not any(tok in body or tok in art.get("title", "") for tok in allowed_media_tokens):
                     return None
                 return art, fetched
@@ -3134,11 +3234,7 @@ class OnlineNewsTracker:
                     continue
                 rec_med = r.get("media", "")
                 if media_clean:
-                    is_match = (
-                        media_clean in rec_med 
-                        or rec_med in media_clean
-                        or (media_clean in MEDIA_GROUP_ALIASES and any(alias in rec_med for alias in MEDIA_GROUP_ALIASES[media_clean]))
-                    )
+                    is_match = is_same_media_company(media_clean, rec_med)
                     if not is_match:
                         continue
                 matched_recs.append(r)
@@ -3512,7 +3608,7 @@ class MediaDatabase:
         self.purge_excluded_department_records()
 
     def purge_excluded_department_records(self) -> int:
-        """기존 DB에서 '예능', '드라마' 등 제외 대상 부서 레코드를 영구 삭제합니다."""
+        """기존 DB에서 '예능', '드라마' 등 제외 대상 부서 및 웹 노이즈/STOPWORDS 인명 레코드를 영구 삭제합니다."""
         deleted_count = 0
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -3524,6 +3620,15 @@ class MediaDatabase:
                     cursor.execute("DELETE FROM personnel_records WHERE dept LIKE ?", (f"%{kw}%",))
                 cursor.execute("DELETE FROM reporters WHERE current_dept LIKE ?", (f"%{kw}%",))
                 cursor.execute("DELETE FROM job_changes WHERE from_dept LIKE ? OR to_dept LIKE ?", (f"%{kw}%", f"%{kw}%"))
+
+            for sw in STOPWORDS:
+                cursor.execute("SELECT id FROM personnel_records WHERE name = ?", (sw,))
+                ids = [r[0] for r in cursor.fetchall()]
+                if ids:
+                    deleted_count += len(ids)
+                    cursor.execute("DELETE FROM personnel_records WHERE name = ?", (sw,))
+                cursor.execute("DELETE FROM reporters WHERE name = ?", (sw,))
+                cursor.execute("DELETE FROM job_changes WHERE name = ?", (sw,))
             conn.commit()
         return deleted_count
 
@@ -3919,16 +4024,62 @@ class MediaDatabase:
             rows = [dict(row) for row in cursor.fetchall()]
             return self.deduplicate_timeline_records(rows, sort_desc=True)
 
+    @staticmethod
+    def _build_media_sql_condition(col_name: str, media_name: str) -> Tuple[str, List[str]]:
+        """
+        언론사 검색 시 머니투데이 vs 머니투데이방송(MTN) 등 유사 명칭 언론사를 정확히 분리하기 위한 SQL 절과 파라미터를 생성합니다.
+        """
+        if not media_name:
+            return "", []
+        m_raw = media_name.strip()
+        m_norm = normalize_media_name(m_raw)
+
+        # 1. 머니투데이 (신문) 검색 시: 머니투데이방송(MTN) 완벽 배제
+        if m_norm == "머니투데이" or m_raw in ["머니투데이", "머투", "머니투데이신문", "머니투데이그룹", "머니투데이미디어"]:
+            sql = f"(({col_name} LIKE ? OR {col_name} LIKE ?) AND {col_name} NOT LIKE '%방송%' AND {col_name} NOT LIKE '%MTN%' AND {col_name} NOT LIKE '%mtn%')"
+            return sql, [f"%{m_raw}%", f"%{m_norm}%"]
+
+        # 2. 머니투데이방송 (MTN) 검색 시: 머니투데이방송 및 MTN만 정확 매칭 (신문 머니투데이 배제)
+        if m_norm == "머니투데이방송" or any(k in m_raw.lower() for k in ["mtn", "머니투데이방송", "머니투데이 방송"]):
+            sql = f"({col_name} LIKE '%머니투데이방송%' OR {col_name} LIKE '%MTN%' OR {col_name} LIKE '%mtn%')"
+            return sql, []
+
+        # 3. 한국경제 (신문) 검색 시: 한국경제TV 배제
+        if m_norm == "한국경제":
+            sql = f"(({col_name} LIKE ? OR {col_name} LIKE ?) AND {col_name} NOT LIKE '%TV%' AND {col_name} NOT LIKE '%tv%' AND {col_name} NOT LIKE '%방송%')"
+            return sql, [f"%{m_raw}%", f"%{m_norm}%"]
+
+        # 4. 한국경제TV 검색 시:
+        if "한국경제tv" in m_raw.lower() or "한경tv" in m_raw.lower():
+            sql = f"({col_name} LIKE '%한국경제TV%' OR {col_name} LIKE '%한국경제tv%')"
+            return sql, []
+
+        # 5. 매일경제 (신문) 검색 시: MBN / 매일경제TV 배제
+        if m_norm == "매일경제":
+            sql = f"(({col_name} LIKE ? OR {col_name} LIKE ?) AND {col_name} NOT LIKE '%MBN%' AND {col_name} NOT LIKE '%mbn%' AND {col_name} NOT LIKE '%TV%' AND {col_name} NOT LIKE '%tv%')"
+            return sql, [f"%{m_raw}%", f"%{m_norm}%"]
+
+        # 6. 조선일보 (신문) 검색 시: TV조선 배제
+        if m_norm == "조선일보":
+            sql = f"(({col_name} LIKE ? OR {col_name} LIKE ?) AND {col_name} NOT LIKE '%TV%' AND {col_name} NOT LIKE '%tv%')"
+            return sql, [f"%{m_raw}%", f"%{m_norm}%"]
+
+        # 기본: 일반 매체
+        sql = f"({col_name} LIKE ? OR {col_name} LIKE ?)"
+        return sql, [f"%{m_raw}%", f"%{m_norm}%"]
+
     def search_reporters(self, name: str = "", media: str = "", dept: str = "", rank: str = "") -> List[Dict[str, Any]]:
         # 복합 검색어 자동 분리 (예: media="뉴스1 건설부동산" -> media="뉴스1", dept="건설부동산")
         if media and not dept:
-            for km in sorted(KNOWN_MEDIA_NAMES, key=len, reverse=True):
-                if media.startswith(km) and len(media) > len(km):
-                    remainder = media[len(km):].strip()
-                    if remainder:
-                        media = km
-                        dept = remainder
-                        break
+            m_chk = media.strip()
+            if m_chk not in KNOWN_MEDIA_NAMES and normalize_media_name(m_chk) not in KNOWN_MEDIA_NAMES:
+                for km in sorted(KNOWN_MEDIA_NAMES, key=len, reverse=True):
+                    if m_chk.startswith(km) and len(m_chk) > len(km):
+                        remainder = m_chk[len(km):].strip()
+                        if remainder and (remainder in ["건설부동산", "산업부", "경제부", "정치부", "사회부", "금융부", "증권부"] or remainder.endswith(("부", "팀", "국", "실", "센터", "단", "소")) or " " in media):
+                            media = km
+                            dept = remainder
+                            break
             if not dept and " " in media:
                 parts = media.split(None, 1)
                 if any(is_same_media_company(parts[0], km) for km in KNOWN_MEDIA_NAMES) or parts[0] in KNOWN_MEDIA_NAMES:
@@ -4016,8 +4167,9 @@ class MediaDatabase:
                             WHERE pr.reporter_id = r.reporter_id
                         """
                     if media:
-                        query += " AND (pr.media LIKE ? OR pr.media LIKE ?)"
-                        params.extend([f"%{media}%", f"%{normalize_media_name(media)}%"])
+                        m_pr_sql, m_pr_params = self._build_media_sql_condition("pr.media", media)
+                        query += f" AND {m_pr_sql}"
+                        params.extend(m_pr_params)
                     query += f""" AND {d_pr_sql} 
                              AND {rep_rank_pr_sql}
                         )
@@ -4025,8 +4177,9 @@ class MediaDatabase:
                         """
                     params.extend(d_pr_p)
                     if media:
-                        query += " (r.current_media LIKE ? OR r.current_media LIKE ?) AND "
-                        params.extend([f"%{media}%", f"%{normalize_media_name(media)}%"])
+                        m_cur_sql, m_cur_params = self._build_media_sql_condition("r.current_media", media)
+                        query += f" {m_cur_sql} AND "
+                        params.extend(m_cur_params)
                     query += f""" {d_cur_sql} AND {rep_rank_cur_sql}
                         )
                     )"""
@@ -4038,8 +4191,9 @@ class MediaDatabase:
                             WHERE pr.reporter_id = r.reporter_id
                         """
                     if media:
-                        query += " AND (pr.media LIKE ? OR pr.media LIKE ?)"
-                        params.extend([f"%{media}%", f"%{normalize_media_name(media)}%"])
+                        m_pr_sql, m_pr_params = self._build_media_sql_condition("pr.media", media)
+                        query += f" AND {m_pr_sql}"
+                        params.extend(m_pr_params)
                     query += f""" AND {d_pr_sql} 
                              AND (pr.rank_title LIKE ? OR pr.dept LIKE ?)
                         )
@@ -4048,8 +4202,9 @@ class MediaDatabase:
                     params.extend(d_pr_p)
                     params.extend([f"%{rank}%", f"%{rank}%"])
                     if media:
-                        query += " (r.current_media LIKE ? OR r.current_media LIKE ?) AND "
-                        params.extend([f"%{media}%", f"%{normalize_media_name(media)}%"])
+                        m_cur_sql, m_cur_params = self._build_media_sql_condition("r.current_media", media)
+                        query += f" {m_cur_sql} AND "
+                        params.extend(m_cur_params)
                     query += f""" {d_cur_sql} AND r.current_rank LIKE ?
                         )
                     )"""
@@ -4067,16 +4222,18 @@ class MediaDatabase:
                         WHERE pr.reporter_id = r.reporter_id
                     """
                 if media:
-                    query += " AND (pr.media LIKE ? OR pr.media LIKE ?)"
-                    params.extend([f"%{media}%", f"%{normalize_media_name(media)}%"])
+                    m_pr_sql, m_pr_params = self._build_media_sql_condition("pr.media", media)
+                    query += f" AND {m_pr_sql}"
+                    params.extend(m_pr_params)
                 query += f""" AND {d_pr_sql}
                     )
                     OR (
                     """
                 params.extend(d_pr_p)
                 if media:
-                    query += " (r.current_media LIKE ? OR r.current_media LIKE ?) AND "
-                    params.extend([f"%{media}%", f"%{normalize_media_name(media)}%"])
+                    m_cur_sql, m_cur_params = self._build_media_sql_condition("r.current_media", media)
+                    query += f" {m_cur_sql} AND "
+                    params.extend(m_cur_params)
                 query += f""" {d_cur_sql}
                     )
                 )"""
@@ -4089,15 +4246,17 @@ class MediaDatabase:
                             WHERE pr.reporter_id = r.reporter_id
                         """
                     if media:
-                        query += " AND (pr.media LIKE ? OR pr.media LIKE ?)"
-                        params.extend([f"%{media}%", f"%{normalize_media_name(media)}%"])
+                        m_pr_sql, m_pr_params = self._build_media_sql_condition("pr.media", media)
+                        query += f" AND {m_pr_sql}"
+                        params.extend(m_pr_params)
                     query += f""" AND {rep_rank_pr_sql}
                         )
                         OR (
                         """
                     if media:
-                        query += " (r.current_media LIKE ? OR r.current_media LIKE ?) AND "
-                        params.extend([f"%{media}%", f"%{normalize_media_name(media)}%"])
+                        m_cur_sql, m_cur_params = self._build_media_sql_condition("r.current_media", media)
+                        query += f" {m_cur_sql} AND "
+                        params.extend(m_cur_params)
                     query += f""" {rep_rank_cur_sql}
                         )
                     )"""
@@ -4108,27 +4267,31 @@ class MediaDatabase:
                             WHERE pr.reporter_id = r.reporter_id
                         """
                     if media:
-                        query += " AND (pr.media LIKE ? OR pr.media LIKE ?)"
-                        params.extend([f"%{media}%", f"%{normalize_media_name(media)}%"])
+                        m_pr_sql, m_pr_params = self._build_media_sql_condition("pr.media", media)
+                        query += f" AND {m_pr_sql}"
+                        params.extend(m_pr_params)
                     query += """ AND (pr.rank_title LIKE ? OR pr.dept LIKE ?)
                         )
                         OR (
                         """
                     params.extend([f"%{rank}%", f"%{rank}%"])
                     if media:
-                        query += " (r.current_media LIKE ? OR r.current_media LIKE ?) AND "
-                        params.extend([f"%{media}%", f"%{normalize_media_name(media)}%"])
+                        m_cur_sql, m_cur_params = self._build_media_sql_condition("r.current_media", media)
+                        query += f" {m_cur_sql} AND "
+                        params.extend(m_cur_params)
                     query += """ r.current_rank LIKE ?
                         )
                     )"""
                     params.append(f"%{rank}%")
             elif media:
-                m_norm = normalize_media_name(media)
-                query += """ AND (
-                    r.current_media LIKE ? OR r.current_media LIKE ? OR 
-                    EXISTS (SELECT 1 FROM personnel_records pr WHERE pr.reporter_id = r.reporter_id AND (pr.media LIKE ? OR pr.media LIKE ?))
+                m_cur_sql, m_cur_params = self._build_media_sql_condition("r.current_media", media)
+                m_pr_sql, m_pr_params = self._build_media_sql_condition("pr.media", media)
+                query += f""" AND (
+                    {m_cur_sql} OR 
+                    EXISTS (SELECT 1 FROM personnel_records pr WHERE pr.reporter_id = r.reporter_id AND {m_pr_sql})
                 )"""
-                params.extend([f"%{media}%", f"%{m_norm}%", f"%{media}%", f"%{m_norm}%"])
+                params.extend(m_cur_params)
+                params.extend(m_pr_params)
 
             query += " ORDER BY r.last_seen DESC"
             cursor.execute(query, params)
@@ -4137,13 +4300,15 @@ class MediaDatabase:
     def search_records(self, name: str = "", media: str = "", dept: str = "", rank: str = "", limit: int = 2000) -> List[Dict[str, Any]]:
         # 복합 검색어 자동 분리 (예: media="뉴스1 건설부동산" -> media="뉴스1", dept="건설부동산")
         if media and not dept:
-            for km in sorted(KNOWN_MEDIA_NAMES, key=len, reverse=True):
-                if media.startswith(km) and len(media) > len(km):
-                    remainder = media[len(km):].strip()
-                    if remainder:
-                        media = km
-                        dept = remainder
-                        break
+            m_chk = media.strip()
+            if m_chk not in KNOWN_MEDIA_NAMES and normalize_media_name(m_chk) not in KNOWN_MEDIA_NAMES:
+                for km in sorted(KNOWN_MEDIA_NAMES, key=len, reverse=True):
+                    if m_chk.startswith(km) and len(m_chk) > len(km):
+                        remainder = m_chk[len(km):].strip()
+                        if remainder and (remainder in ["건설부동산", "산업부", "경제부", "정치부", "사회부", "금융부", "증권부"] or remainder.endswith(("부", "팀", "국", "실", "센터", "단", "소")) or " " in media):
+                            media = km
+                            dept = remainder
+                            break
             if not dept and " " in media:
                 parts = media.split(None, 1)
                 if any(is_same_media_company(parts[0], km) for km in KNOWN_MEDIA_NAMES) or parts[0] in KNOWN_MEDIA_NAMES:
@@ -4157,9 +4322,9 @@ class MediaDatabase:
                 query += " AND name LIKE ?"
                 params.append(f"%{name}%")
             if media:
-                m_norm = normalize_media_name(media)
-                query += " AND (media LIKE ? OR media LIKE ?)"
-                params.extend([f"%{media}%", f"%{m_norm}%"])
+                m_sql, m_params = self._build_media_sql_condition("media", media)
+                query += f" AND {m_sql}"
+                params.extend(m_params)
             if dept:
                 clean_d = dept.strip()
                 if "건설" in clean_d and "부동산" in clean_d:
