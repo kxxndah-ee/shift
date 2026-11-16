@@ -170,6 +170,7 @@ STOPWORDS = {
     "임용", "임명", "채용", "영입", "이동", "전임", "선출", "위촉", "해임", "면직", "보직",
     "외", "등", "겸", "및", "간", "후보", "부국장", "직무대행", "권한대행", "직대", "내정자",
     "상임고문", "고문", "전무이사", "상무이사", "상무보", "연구소장", "부소장", "칼럼니스트",
+    "과장급", "과장", "부단장", "단장", "서기관", "서기관급", "사무관", "사무관급", "논설실장", "보도실장",
     "카톡", "이메일", "제보", "문의", "게재", "연락처", "포함", "담당자", "저작권",
     "무단전재", "재배포", "신문사", "제보는", "산업국", "중앙신문", "경향신문", "한국정경",
     "서울경제", "한겨레", "조선일보", "동아일보", "연합뉴스", "뉴스1", "뉴시스",
@@ -661,7 +662,11 @@ class PersonnelRegexParser:
             return None
         if name in STOPWORDS or name in ["보직발령", "정기인사", "인사발령", "조직개편", "보직변경", "승진인사", "정기승진", "보직임명"]:
             return None
-        if name in ["직무대행", "권한대행", "직대", "내정자", "내정", "상임고문", "고문", "전무이사", "상무이사", "상무보", "연구소장", "부소장", "칼럼니스트", "대표이사", "주필", "논설주간", "논설위원실장", "수석논설위원"]:
+        if name in [
+            "직무대행", "권한대행", "직대", "내정자", "내정", "상임고문", "고문", "전무이사", "상무이사", "상무보",
+            "연구소장", "부소장", "칼럼니스트", "대표이사", "주필", "논설주간", "논설위원실장", "수석논설위원",
+            "과장급", "과장", "부단장", "단장", "서기관", "서기관급", "사무관", "사무관급", "논설실장", "보도실장"
+        ]:
             return None
         dept_keywords = [
             "정치", "경제", "사회", "산업", "금융", "증권", "문화", "국제", "체육", "유통", "중기", "바이오",
@@ -1313,6 +1318,24 @@ class PersonnelTrackerEngine:
 
         sorted_records = sorted(effective_records, key=parse_date_key)
 
+        # 레코드별 date 객체 사전 파싱 및 매체/이름별 인덱스 구축 (이직 판정 시 양방향 크로스체크용)
+        records_by_media_and_name: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        for r in sorted_records:
+            if "_date_obj" not in r:
+                d_str = str(r.get("pub_date", "1970-01-01")).replace(".", "-").split("T")[0][:10]
+                try:
+                    r["_date_obj"] = datetime.datetime.strptime(d_str, "%Y-%m-%d").date()
+                except Exception:
+                    r["_date_obj"] = datetime.date(1970, 1, 1)
+
+            r_name = str(r.get("name", "")).strip()
+            r_media = normalize_media_name(r.get("media", ""))
+            if r_name and r_media:
+                k = (r_media, r_name)
+                if k not in records_by_media_and_name:
+                    records_by_media_and_name[k] = []
+                records_by_media_and_name[k].append(r)
+
         # 동명이인 클러스터 컨테이너: Dict[name, List[ReporterCluster]]
         clusters_by_name: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -1329,7 +1352,8 @@ class PersonnelTrackerEngine:
             target_cluster = self._match_or_create_cluster(
                 record=record,
                 existing_clusters=clusters_by_name[name],
-                job_changes_collector=detected_job_changes
+                job_changes_collector=detected_job_changes,
+                media_records_index=records_by_media_and_name
             )
 
             # 레코드에 확정된 reporter_id 및 display_label 부여
@@ -1354,7 +1378,8 @@ class PersonnelTrackerEngine:
         self,
         record: Dict[str, Any],
         existing_clusters: List[Dict[str, Any]],
-        job_changes_collector: List[Dict[str, Any]]
+        job_changes_collector: List[Dict[str, Any]],
+        media_records_index: Optional[Dict[Tuple[str, str], List[Dict[str, Any]]]] = None
     ) -> Dict[str, Any]:
         """
         단일 레코드에 대해 기존 클러스터 매칭 여부를 검증하고, 일치하는 클러스터가 없으면 신규 클러스터를 생성합니다.
@@ -1372,12 +1397,14 @@ class PersonnelTrackerEngine:
         if rec_email and "@" in rec_email:
             rec_email_prefix = rec_email.split("@")[0].lower()
 
-        try:
-            rec_date = datetime.datetime.strptime(
-                rec_date_str.replace(".", "-").split("T")[0][:10], "%Y-%m-%d"
-            ).date()
-        except Exception:
-            rec_date = datetime.date(2020, 1, 1)
+        rec_date = record.get("_date_obj")
+        if not rec_date:
+            try:
+                rec_date = datetime.datetime.strptime(
+                    rec_date_str.replace(".", "-").split("T")[0][:10], "%Y-%m-%d"
+                ).date()
+            except Exception:
+                rec_date = datetime.date(2020, 1, 1)
 
         best_cluster = None
         best_score = -999.0
@@ -1462,16 +1489,41 @@ class PersonnelTrackerEngine:
 
             # CASE B: 서로 다른 언론사 간의 이동 (이직 탐지 알고리즘)
             else:
-                # 16번 요청 조건 반영:
-                # 1) A매체 이전 인사 후 6개월(180일) 안에 타사 인사리스트에 등장할 시 이직으로 감지
-                # 2) 직급이 강등될 경우 이직에서 제외 (Demotion Filter)
-                # 3) 동명이인 필터링: 유사한 부서/도메인일 경우에만 이직으로 인정
-                
+                # ----------------------------------------------------
+                # [전사 시스템 이직 크로스체크 검증 시스템 (Bi-directional Cross-check)]
+                # 1) 대상 매체(to_media) 이전 인사기사 크로스체크:
+                #    발령일(rec_date) 이전에 대상 매체(to_media)에 이미 동일 이름의 인사기사가 존재하는지 확인.
+                #    이미 과거에 재직했던 기록이 있다면, 신규 타사 이직 영입이 아니라
+                #    해당 매체의 내부 기존 직원이거나 해당 매체 고유의 동명이인이므로 이직 판단에서 완전 배제.
+                # 2) 출신 매체(from_media) 사후 재직 크로스체크 (유령 이직 방지):
+                #    발령일(rec_date) 이후에도 출신 매체(from_media)에서 계속해서 인사기사가 보도된다면,
+                #    실제로 타사로 이직한 것이 아니므로(동명이인 오매칭 또는 단순 인용/파견 등) 이직 판단에서 완전 배제.
+                # ----------------------------------------------------
+                has_target_prior_history = False
+                has_origin_subsequent_history = False
+
+                if media_records_index is not None:
+                    # 1) 대상 매체 이전 기록 확인 (타깃 매체에 이전 발령 이력이 이미 존재하는지 검증)
+                    target_records = media_records_index.get((rec_media, name), [])
+                    for tr in target_records:
+                        tr_date = tr.get("_date_obj") or tr.get("date_obj")
+                        if tr_date and tr_date < rec_date:
+                            has_target_prior_history = True
+                            break
+
+                    # 2) 출신 매체 사후 기록 확인 (출신 매체에 사후 발령 이력이 계속 존재하는지 검증)
+                    origin_records = media_records_index.get((last_media, name), [])
+                    for fr in origin_records:
+                        fr_date = fr.get("_date_obj") or fr.get("date_obj")
+                        if fr_date and fr_date > rec_date:
+                            has_origin_subsequent_history = True
+                            break
+
                 is_recruit_action = record.get("action_type") in ["임용", "영입", "전입", "이동"]
                 # 언론계 이직 탐색 기간: 단기 이직부터 일반적인 2~4년 근속 후 이직(최대 5년, 1825일)까지 폭넓게 수용
                 is_within_transfer_window = (0 <= days_diff <= 1825) or has_same_email
                 is_demoted = (rank_diff < 0) and not is_desk_lateral
-                
+
                 # 부서 및 도메인 유사도 검증
                 domain_sim = calculate_domain_similarity(rec_domain, last_domain)
                 last_kw = set(re.findall(r"[가-힣]{2,}", last_dept)) - STOPWORDS
@@ -1479,12 +1531,15 @@ class PersonnelTrackerEngine:
                 kw_match = bool(last_kw and rec_kw and (last_kw & rec_kw))
                 is_similar_dept = (domain_sim >= 0.5) or kw_match or (rec_domain == last_domain and rec_domain != "일반") or has_same_email
 
-                if is_within_transfer_window and not is_demoted and is_similar_dept:
+                # 크로스체크 통과 여부: 대상 매체에 이전 기록이 없어야 하고, 출신 매체에 사후 기록이 없어야 함
+                crosscheck_passed = not has_target_prior_history and not has_origin_subsequent_history
+
+                if is_within_transfer_window and not is_demoted and is_similar_dept and crosscheck_passed:
                     # 정상적인 매체 간 이직 판정
                     score += 65.0 + domain_sim * 30.0
                     if is_recruit_action:
                         score += 30.0
-                    
+
                     # 직급 연속성 및 승진 가점
                     if rank_diff == 0 or is_desk_lateral:
                         # 동일 직급 유지 이직 또는 데스크급 수평 이직
@@ -1509,7 +1564,7 @@ class PersonnelTrackerEngine:
                         score += 15.0
                     else:
                         score += 5.0
-                    
+
                     is_group_transfer = are_group_affiliates(last_media, rec_media)
                     # 동일 그룹/계열사 내에서 30일 이내 발생한 발령은 중복 보도 또는 내부 전보이므로 이직(Job Change) 리스트에는 등록하지 않음
                     is_real_job_change = not (is_group_transfer and days_diff <= 30)
@@ -1527,14 +1582,20 @@ class PersonnelTrackerEngine:
                         "days_gap": days_diff,
                         "confidence_score": round(score, 1),
                         "detected_reason": (
-                            f"{'6개월 내 타사 이동' if days_diff <= 180 else f'{round(days_diff/365, 1)}년 만의 타사 이직'}, 부서 유사도({int(domain_sim*100)}%), "
+                            f"{'6개월 내 타사 이동' if days_diff <= 180 else f'{round(days_diff/365, 1)}년 만의 타사 이직'}, "
+                            f"부서 유사도({int(domain_sim*100)}%), "
                             f"{'이메일 일치' if has_same_email else '직급 승진 및 유지'}"
+                            f" (대상 매체 이전 인사기사 및 출신 매체 사후 재직 크로스체크 검증 완료)"
                         )
                     } if is_real_job_change else None
                 else:
-                    # 전입 기간 초과, 직급 강등, 또는 비유사 부서: 이직에서 제외 및 동명이인 분리 가중치
+                    # 전입 기간 초과, 직급 강등, 비유사 부서, 또는 크로스체크 실패(타깃 이전 재직/출신 사후 재직)
                     is_job_change = False
                     candidate_change_meta = None
+                    if has_target_prior_history:
+                        score -= 250.0  # 대상 매체에 이미 이전 인사이력이 있음 -> 해당 매체 기존 재직자(동명이인)
+                    if has_origin_subsequent_history:
+                        score -= 250.0  # 출신 매체에서 이후에도 인사 발생 -> 출신 매체 잔류자(동명이인)
                     if is_demoted:
                         score -= 90.0  # 직급 강등 시 동명이인으로 분리
                     if not is_similar_dept and not has_same_email:
@@ -1576,7 +1637,7 @@ class PersonnelTrackerEngine:
             if is_job_change_candidate and change_metadata:
                 change_metadata["reporter_id"] = best_cluster["reporter_id"]
                 job_changes_collector.append(change_metadata)
-                record["action_type"] = f"이직: {change_metadata['from_media']} ➔ {rec_media}"
+                record["action_type"] = f"이직: {change_metadata['from_media']} -> {rec_media}"
 
             self._update_display_label(best_cluster)
             return best_cluster
@@ -2856,7 +2917,7 @@ class OnlineNewsTracker:
 
         is_stopped = bool(stop_event and getattr(stop_event, "is_set", lambda: False)())
         if all_records:
-            engine = PersonnelTrackerEngine()
+            engine = PersonnelTrackerEngine(db_path=db_path)
             res = engine.process_records(all_records, append=True)
             msg_suffix = " (중단 전까지 수집된 내역 반영)" if is_stopped else ""
             return {
@@ -3161,7 +3222,7 @@ class OnlineNewsTracker:
         # 1. 수집된 모든 유효 언론인 발령 레코드를 DB에 전수 등록 (지식 베이스 누적)
         engine_res = {"unique_reporters": 0}
         if all_parsed_records:
-            engine = PersonnelTrackerEngine()
+            engine = PersonnelTrackerEngine(db_path=db_path)
             engine_res = engine.process_records(all_parsed_records, append=True)
 
         def matches_dept(target_d: str, record_d: str) -> bool:
@@ -3499,7 +3560,7 @@ class OnlineNewsTracker:
         target_str = f"'{media_clean} {name_clean}'" if media_clean else f"'{name_clean}'"
         target_no_res = f"'{media_clean}' 소속 '{name_clean}'" if media_clean else f"'{name_clean}'"
         if all_records:
-            engine = PersonnelTrackerEngine()
+            engine = PersonnelTrackerEngine(db_path=db_path)
             res = engine.process_records(all_records, append=True)
             msg_suffix = " (중단 전까지 수집된 내역 반영)" if is_stopped else ""
             return {
@@ -3544,7 +3605,7 @@ class OnlineNewsTracker:
                 all_records.extend(recs)
 
         if all_records:
-            engine = PersonnelTrackerEngine()
+            engine = PersonnelTrackerEngine(db_path=db_path)
             res = engine.process_records(all_records, append=True)
             return {
                 "articles_count": len(arts),
@@ -3673,7 +3734,7 @@ class OnlineNewsTracker:
 
         job_changes_detected = []
         if all_records:
-            engine = PersonnelTrackerEngine()
+            engine = PersonnelTrackerEngine(db_path=db_path)
             res = engine.process_records(all_records, append=True)
             job_changes_detected = engine.db.get_job_changes(limit=50)
 
@@ -4698,7 +4759,7 @@ def _fetch_full_text_from_url(url: str) -> Optional[str]:
     return None
 
 
-def load_and_process_bigkinds_file(file_path_or_buffer, append: bool = True) -> Dict[str, Any]:
+def load_and_process_bigkinds_file(file_path_or_buffer, append: bool = True, db_path: str = "media_tracker.db") -> Dict[str, Any]:
     """
     빅카인즈 다운로드 표준 엑셀/CSV 파일을 읽고,
     인사 발령 텍스트를 파싱하여 데이터베이스에 저장(또는 누적)합니다.
@@ -4796,7 +4857,7 @@ def load_and_process_bigkinds_file(file_path_or_buffer, append: bool = True) -> 
     if not all_extracted_records:
         raise ValueError("파일 내 기사 본문에서 [부서명] [직책] [이름] 형태의 인사 발령 텍스트를 찾지 못했습니다. 기사 본문에 발령 내용이 포함되어 있는지 확인해주세요.")
 
-    engine = PersonnelTrackerEngine()
+    engine = PersonnelTrackerEngine(db_path=db_path)
     result = engine.process_records(all_extracted_records, append=append)
     return result
 
@@ -4977,7 +5038,7 @@ def generate_career_excel(
             {"항목": "총 경력 연차", "내용": f"총 {metrics.get('career_years', 1)}년차 ({metrics.get('first_year', '')}년 ~ {metrics.get('last_year', '')}년)"},
             {"항목": "주요 출입처 전문분야", "내용": metrics.get("primary_domain", "일반")},
             {"항목": "바이라인 이메일", "내용": reporter_obj.get("email", "") or "미등록"},
-            {"항목": "소속 매체 이동 경로", "내용": " ➔ ".join([f"{a['media']}({a['start_year']}~{a['end_year']})" for a in metrics.get("affiliation_journey", [])])},
+            {"항목": "소속 매체 이동 경로", "내용": " -> ".join([f"{a['media']}({a['start_year']}~{a['end_year']})" for a in metrics.get("affiliation_journey", [])])},
             {"항목": "매체 간 이직 횟수", "내용": f"{metrics.get('job_change_count', 0)}회"},
             {"항목": "승진 발령 횟수", "내용": f"{metrics.get('promotion_count', 0)}회"},
             {"항목": "총 수집 발령/활동 건수", "내용": f"{metrics.get('total_records', len(timeline))}건"},

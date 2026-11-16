@@ -13,10 +13,11 @@ from data_pipeline import load_and_process_bigkinds_file, MediaDatabase
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 if __name__ == "__main__":
-    result = load_and_process_bigkinds_file("sample_data/bigkinds_personnel_sample.xlsx")
+    test_db = "test_media_personnel.db"
+    result = load_and_process_bigkinds_file("sample_data/bigkinds_personnel_sample.xlsx", db_path=test_db)
     print("Process result:", json.dumps(result, ensure_ascii=False, indent=2))
 
-    db = MediaDatabase()
+    db = MediaDatabase(test_db)
     stats = db.get_stats()
     print("DB Stats:", stats)
 
