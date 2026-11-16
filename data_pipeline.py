@@ -40,16 +40,24 @@ RANK_HIERARCHY: Dict[str, int] = {
     "대표": 10,
     "사장": 10,
     "부사장": 9,
+    "전무이사": 9,
+    "상무이사": 9,
+    "상무보": 9,
     "전무": 9,
     "상무": 9,
     "이사": 9,
     "임원급": 9,
+    "상임고문": 9,
+    "고문": 9,
     "주필": 9,
     "논설주간": 9,
     "편집국장": 8,
     "보도국장": 8,
     "논설위원실장": 8,
     "수석논설위원": 8,
+    "연구소장": 8,
+    "부소장": 7,
+    "칼럼니스트": 7,
     "국장": 8,
     "국장급": 8,
     "국장대우": 8,
@@ -160,7 +168,8 @@ STOPWORDS = {
     "매일", "경제", "대표", "국장", "부장", "차장", "팀장", "기자", "위원", "실장", "총괄",
     "대우", "승진", "전보", "보임", "신규", "선임", "퇴임", "파견", "내정", "전보자",
     "임용", "임명", "채용", "영입", "이동", "전임", "선출", "위촉", "해임", "면직", "보직",
-    "외", "등", "겸", "및", "간", "후보", "부국장",
+    "외", "등", "겸", "및", "간", "후보", "부국장", "직무대행", "권한대행", "직대", "내정자",
+    "상임고문", "고문", "전무이사", "상무이사", "상무보", "연구소장", "부소장", "칼럼니스트",
     "카톡", "이메일", "제보", "문의", "게재", "연락처", "포함", "담당자", "저작권",
     "무단전재", "재배포", "신문사", "제보는", "산업국", "중앙신문", "경향신문", "한국정경",
     "서울경제", "한겨레", "조선일보", "동아일보", "연합뉴스", "뉴스1", "뉴시스",
@@ -170,7 +179,16 @@ STOPWORDS = {
     "밴드", "프린트", "본문", "글자", "크기", "조정", "닫기", "댓글", "좋아요", "슬퍼요",
     "화나요", "후속요청", "국내", "최대", "원스톱", "콘텐츠", "플랫폼", "함께", "보면", "좋은",
     "데이블", "읽기", "후원링크", "다양한", "주제별", "맞춤", "추천", "북마크", "메신저", "복사",
-    "글자크기", "폰트", "공유", "제공", "연합"
+    "글자크기", "폰트", "공유", "제공", "연합", "확인", "취소", "읽기모드", "음성지원", "다크모드",
+    "폰트크기", "기사반응", "기사후원", "기사보기", "댓글보기", "새창열림", "구독하기", "응원하기",
+    "후원하기", "전체기사", "실시간", "다른기사", "바로가기", "전체메뉴", "채널구독", "트위터로",
+    "내용입력", "주소복사", "알아보기", "인기기사", "소름돋는", "한화파워", "가나다순", "퍼가기",
+    "이메일로", "그림으로", "측근그룹", "인수위", "리버풀에", "초유의"
+}
+
+EXECUTIVE_RANKS: Set[str] = {
+    "대표이사", "대표", "사장", "부사장", "전무이사", "상무이사", "상무보", "전무", "상무",
+    "이사", "임원급", "상임고문", "고문", "주필"
 }
 
 MEDIA_GROUP_ALIASES: Dict[str, List[str]] = {
@@ -643,6 +661,8 @@ class PersonnelRegexParser:
             return None
         if name in STOPWORDS or name in ["보직발령", "정기인사", "인사발령", "조직개편", "보직변경", "승진인사", "정기승진", "보직임명"]:
             return None
+        if name in ["직무대행", "권한대행", "직대", "내정자", "내정", "상임고문", "고문", "전무이사", "상무이사", "상무보", "연구소장", "부소장", "칼럼니스트", "대표이사", "주필", "논설주간", "논설위원실장", "수석논설위원"]:
+            return None
         dept_keywords = [
             "정치", "경제", "사회", "산업", "금융", "증권", "문화", "국제", "체육", "유통", "중기", "바이오",
             "전국", "지방", "사진", "교열", "어문", "기획", "비서", "감사", "총무", "법무", "인사", "영업",
@@ -715,16 +735,38 @@ class PersonnelRegexParser:
 
         current_action = "발령"
         current_section_rank = ""
+        current_dept = ""
+        current_rank = ""
+        current_bureau = ""
 
-        # 줄 단위 또는 불릿 기호 단위로 분할 처리
-        lines = [html.unescape(line).strip() for line in article_text.splitlines() if line.strip()]
+        # 줄 단위 또는 불릿 기호 단위로 분할 처리 (한 줄에 여러 다이아몬드 헤더가 공존하는 경우 분할)
+        raw_lines = [html.unescape(line).strip() for line in article_text.splitlines() if line.strip()]
+        lines: List[str] = []
+        for rl in raw_lines:
+            sub_parts = re.split(r"(?<=[^\s])\s*(?=[◇◆■□【])", rl)
+            for sp in sub_parts:
+                sp = sp.strip()
+                if sp:
+                    lines.append(sp)
 
         for line in lines:
-            # 0. 푸터, 제보 및 문의 안내 문구 스킵
-            if any(k in line for k in ["게재 문의", "제보", "저작권", "무단전재", "재배포", "기사문의", "확인용", "카톡", "연락처"]):
+            # 0. 푸터, 제보 및 문의 안내 문구, 포털 하단 추천기사 배너 스킵
+            if any(k in line for k in [
+                "게재 문의", "제보", "저작권", "무단전재", "재배포", "기사문의", "확인용", "카톡", "연락처",
+                "인기기사", "다른기사", "관련기사", "주요뉴스", "뉴스스탠드", "인터랙티브", "날벼락", "참여할까",
+                "완패", "사태", "감탄한", "가다간", "만나보세요", "퍼가기"
+            ]):
                 continue
 
-            # 0-1. 통신사/바이라인 시그니처 및 기사 종결 기호 사전 정제 (예: (서울=연합뉴스), (서울=뉴스1), [이데일리 김유정기자] 등)
+            # 0-1. 불릿도 없고 직급/발령/부서/언론사 헤더도 없는 단순 UI 버튼/단문 라인 스킵
+            has_bullet = bool(re.search(cls.BULLET_CHARS, line))
+            has_rank_or_action = any(r in line for r in ["부장", "차장", "국장", "부국장", "본부장", "팀장", "실장", "직대", "대우", "기자", "논설", "주필", "고문", "이사", "대표", "사장", "승진", "전보", "보임", "발령", "임용", "선임"])
+            has_dept = any(d in line for d in ["국", "부", "팀", "실", "센터", "처", "소", "단", "본부", "지사", "지국", "연구소"])
+            has_media_hdr = bool(cls.MEDIA_HEADER_PATTERN.search(line))
+            if not has_bullet and not has_rank_or_action and not has_dept and not has_media_hdr:
+                continue
+
+            # 0-2. 통신사/바이라인 시그니처 및 기사 종결 기호 사전 정제 (예: (서울=연합뉴스), (서울=뉴스1), [이데일리 김유정기자] 등)
             line = re.sub(r"\([가-힣\s]*=(?:연합뉴스|뉴스1|[가-힣\s]*)\)", "", line)
             line = re.sub(r"\([^)]*(?:연합뉴스|뉴스1|끝)[^)]*\)", "", line)
             line = re.sub(r"\([가-힣\w\s·-]*=[가-힣\w\s·-]*\)", "", line)
@@ -741,8 +783,14 @@ class PersonnelRegexParser:
                 cand_media = media_match.group(1).strip()
                 if is_media_organization(cand_media) and not is_department_header(cand_media):
                     current_media = normalize_media_name(cand_media)
+                    current_dept = ""
+                    current_rank = ""
+                    current_bureau = ""
                 elif not is_department_header(cand_media):
                     current_media = cand_media
+                    current_dept = ""
+                    current_rank = ""
+                    current_bureau = ""
             else:
                 clean_sec_hdr = re.sub(r"^[◇◆■□▲△▼▽▷▶<\[\(【Δδ\s]+|[>\]\)】\s]+$", "", line).strip()
                 clean_sec_hdr = re.sub(r"\([^\)]*\)", "", clean_sec_hdr).strip()
@@ -750,11 +798,18 @@ class PersonnelRegexParser:
                 is_action_or_rank = any(act in clean_sec_hdr for act in cls.ACTION_CANDIDATES) or any(rnk in clean_sec_hdr for rnk in ["부장", "차장", "국장", "부국장", "본부장", "팀장", "실장", "직대", "대우", "기자", "논설", "주필", "위원", "단장", "디렉터", "총괄"])
                 if not is_action_or_rank and len(clean_sec_hdr) <= 15 and not any(cls.clean_name(t) for t in line.split()):
                     if is_department_header(clean_sec_hdr):
-                        pass
+                        current_bureau = clean_sec_hdr
+                        current_dept = clean_sec_hdr
                     elif is_media_organization(clean_sec_hdr):
                         current_media = normalize_media_name(clean_sec_hdr)
+                        current_dept = ""
+                        current_rank = ""
+                        current_bureau = ""
                     elif any(nmk in clean_sec_hdr for nmk in NON_MEDIA_KEYWORDS) or clean_sec_hdr.endswith(("처", "청", "원", "회", "공사", "공단", "재단", "시", "대학교", "대학", "병원", "학원")):
                         current_media = clean_sec_hdr
+                        current_dept = ""
+                        current_rank = ""
+                        current_bureau = ""
 
             # 2. 발령 액션 및 섹션 직급 헤더 감지 (예: ◇부장대우 승진, ◇차장 승진, <승진>, <보임>, <임용>, ◇전보 등)
             clean_hdr = re.sub(r"^[◇◆■□▲△▼▽▷▶<\[\(【Δδ\s]+", "", line).strip()
@@ -789,12 +844,20 @@ class PersonnelRegexParser:
                 is_item_action_or_rank = any(act in cand_media_clean for act in cls.ACTION_CANDIDATES) or any(rnk in cand_media_clean for rnk in ["부장", "차장", "국장", "부국장", "본부장", "팀장", "실장", "직대", "대우", "기자", "논설", "주필", "위원", "단장", "디렉터", "총괄"])
                 if not is_item_action_or_rank and len(cand_media_clean) <= 15 and not any(cls.clean_name(t) for t in item.split()):
                     if is_department_header(cand_media_clean):
+                        current_bureau = cand_media_clean
+                        current_dept = cand_media_clean
                         continue
                     elif is_media_organization(cand_media_clean):
                         current_media = normalize_media_name(cand_media_clean)
+                        current_dept = ""
+                        current_rank = ""
+                        current_bureau = ""
                         continue
                     elif any(nmk in cand_media_clean for nmk in NON_MEDIA_KEYWORDS) or cand_media_clean.endswith(("처", "청", "원", "회", "공사", "공단", "재단", "시", "대학교", "대학", "병원", "학원")):
                         current_media = cand_media_clean
+                        current_dept = ""
+                        current_rank = ""
+                        current_bureau = ""
                         continue
 
                 # 4-2. 항목 단위 발령 액션 및 섹션 직급 헤더 감지 (예: <부장대우 승진>, <승진>, <보임>, <임용>, <전보> 등)
@@ -864,8 +927,15 @@ class PersonnelRegexParser:
 
                 for s_item in split_items:
                     # 서브 아이템 파싱 (쉼표, 슬래시, 세미콜론 등으로 나열된 경우)
-                    sub_records = cls._parse_single_bullet(
-                        s_item, current_media, current_action, current_section_rank, found_email
+                    sub_records, current_dept, current_rank, current_bureau = cls._parse_single_bullet(
+                        text=s_item,
+                        media=current_media,
+                        action=current_action,
+                        section_rank=current_section_rank,
+                        email=found_email,
+                        last_dept=current_dept,
+                        last_rank=current_rank,
+                        last_bureau=current_bureau
                     )
                     for rec in sub_records:
                         rec["pub_date"] = pub_date or str(datetime.date.today())
@@ -912,30 +982,61 @@ class PersonnelRegexParser:
         media: str,
         action: str,
         section_rank: str,
-        email: str
-    ) -> List[Dict[str, Any]]:
+        email: str,
+        last_dept: str = "",
+        last_rank: str = "",
+        last_bureau: str = ""
+    ) -> Tuple[List[Dict[str, Any]], str, str, str]:
         """
-        단일 발령 텍스트 파싱. 이름의 위치(앞, 뒤, 중간)와 다양한 형태, 등호(=), 복수 인명 나열을 유연하게 지원.
+        단일 발령 텍스트 파싱. 이름의 위치(앞, 뒤, 중간)와 다양한 형태, 등호(=), 복수 인명 나열,
+        〃(반복 부호)의 정밀 부서/직급 계승 및 역할 수식어(직무대행) 자동 정제를 완벽 지원.
         """
         records: List[Dict[str, Any]] = []
 
-        # 등호(=) 및 콜론(:) 공백 치환 후 쉼표, 슬래시, 세미콜론 등으로 분할 (가운뎃점은 복합부서명 보존을 위해 제외)
+        # 등호(=) 및 콜론(:) 공백 치환 후 쉼표, 슬래시, 세미콜론 등으로 분할
         clean_text = re.sub(r"\s*(=|:)\s*", " ", text)
         parts = re.split(r"[,/;|]", clean_text)
-        last_dept = ""
-        last_rank = section_rank or ""
+
+        cur_dept = last_dept
+        cur_rank = last_rank or section_rank
+        cur_bureau = last_bureau
 
         for part in parts:
             part = part.strip()
-            tokens = part.split()
-            if not tokens:
+            if not part:
                 continue
 
-            extracted_names: List[str] = []
-            extracted_rank = section_rank or "기자"
-            extracted_dept = last_dept or "본사"
+            # 1. 역할 수식어(직무대행, 권한대행 등) 감지 및 분리
+            is_acting = False
+            clean_part = part
+            for mod in ["직무대행", "권한대행", "직대", "내정자", "내정"]:
+                if mod in clean_part:
+                    clean_part = re.sub(rf"\b{mod}\b", "", clean_part).strip()
+                    is_acting = True
 
-            # 1. 토큰 중 유효한 한글 인명(2~4자) 찾기
+            raw_tokens = clean_part.split()
+            if not raw_tokens:
+                continue
+
+            # 2. 〃(반복 부호) 토큰 정규화
+            tokens = []
+            has_ditto = False
+            for t in raw_tokens:
+                if t in ["〃", "″", "''"]:
+                    tokens.append("DITTO")
+                    has_ditto = True
+                elif t.startswith("〃") or t.startswith("″") or t.startswith("''"):
+                    sub_t = re.sub(r"^[〃″'']+", "", t).strip()
+                    tokens.extend(["DITTO", sub_t])
+                    has_ditto = True
+                else:
+                    tokens.append(t)
+            tokens = [t for t in tokens if t]
+
+            extracted_names: List[str] = []
+            other_tokens: List[str] = []
+
+            # 3. 토큰 중 유효한 한글 인명(2~4자) 찾기
             # 뒤쪽에서부터 연속으로 인명인 토큰들을 모두 수집 (예: "편집국 경제부 차장 홍길동 김철수")
             trailing_name_indices: List[int] = []
             for i in range(len(tokens) - 1, -1, -1):
@@ -953,127 +1054,154 @@ class PersonnelRegexParser:
                     c_name = cls.clean_name(tokens[idx])
                     if c_name:
                         extracted_names.append(c_name)
-            else:
+            elif len(tokens) > 1 and cls.clean_name(tokens[0]) and tokens[0] not in RANK_HIERARCHY and not re.search(f"({RANK_REGEX_PATTERN})$", tokens[0]):
                 # 앞쪽에서 인명이 시작하는 경우 (예: "홍길동 건설부동산부장")
-                front_cand = cls.clean_name(tokens[0])
-                if front_cand and tokens[0] not in RANK_HIERARCHY and not re.search(f"({RANK_REGEX_PATTERN})$", tokens[0]):
-                    extracted_names.append(front_cand)
+                front_name = cls.clean_name(tokens[0])
+                if front_name:
+                    extracted_names.append(front_name)
                     other_tokens = tokens[1:]
+            else:
+                # 중간에 인명이 있는 경우 (예: "논설위원실 양준영 논설위원", "편집국 김정태 부장")
+                name_idx = -1
+                for i, tok in enumerate(tokens):
+                    c_name = cls.clean_name(tok)
+                    if c_name and tok not in RANK_HIERARCHY and not re.search(f"({RANK_REGEX_PATTERN})$", tok):
+                        name_idx = i
+                        extracted_names.append(c_name)
+                        break
+                if name_idx != -1:
+                    other_tokens = [tok for i, tok in enumerate(tokens) if i != name_idx]
                 else:
                     other_tokens = tokens
 
-            # 2. 이름 위치에 따라 부서와 직급 추정
+            extracted_rank = section_rank or cur_rank or "기자"
+            extracted_dept = cur_dept or "본사"
+
+            # 4. 이름 위치 및 DITTO, 토큰에 따른 부서와 직급 확정
             if extracted_names:
-                if not other_tokens:
-                    # 이름만 있는 경우 (부장, 차장 등 직급 언급이 없으면 모두 기자)
-                    extracted_rank = section_rank or "기자"
-                elif len(other_tokens) == 1:
-                    first = other_tokens[0]
-                    # 〃(반복 부호) 처리: 이전 직급 상속 및 부서명 정제
-                    if "〃" in first or "″" in first or "''" in first:
-                        dept_clean = first.replace("〃", "").replace("″", "").replace("''", "").strip()
-                        if dept_clean and not dept_clean.endswith("부") and not dept_clean.endswith("팀"):
-                            dept_clean = dept_clean + ("팀" if "팀" in last_rank else "부")
-                        extracted_dept = dept_clean or last_dept or "본사"
-                        extracted_rank = last_rank or section_rank or "기자"
-                    else:
-                        rank_match = re.search(f"({RANK_REGEX_PATTERN})$", first)
-                        if rank_match:
-                            extracted_rank = rank_match.group(1)
-                            dept_part = first[:rank_match.start()].strip()
+                if has_ditto:
+                    if len(other_tokens) == 2 and other_tokens[0] == "DITTO" and other_tokens[1] == "DITTO":
+                        extracted_dept = cur_dept or "본사"
+                        extracted_rank = cur_rank or section_rank or "기자"
+                    elif len(other_tokens) == 1 and other_tokens[0] == "DITTO":
+                        extracted_dept = cur_dept or "본사"
+                        extracted_rank = cur_rank or section_rank or "기자"
+                    elif other_tokens and other_tokens[0] == "DITTO":
+                        rest = " ".join(other_tokens[1:])
+                        r_match = re.search(f"({RANK_REGEX_PATTERN})$", rest)
+                        if r_match:
+                            extracted_rank = r_match.group(1)
+                            sub_d = rest[:r_match.start()].strip()
+                            if sub_d:
+                                if not sub_d.endswith("부") and not sub_d.endswith("팀"):
+                                    sub_d += ("팀" if "팀" in extracted_rank else "부")
+                                extracted_dept = f"{cur_bureau} {sub_d}".strip() if cur_bureau else sub_d
+                            else:
+                                extracted_dept = cur_dept or "본사"
+                        else:
+                            extracted_dept = f"{cur_bureau} {rest}".strip() if cur_bureau else rest
+                else:
+                    if not other_tokens:
+                        extracted_rank = section_rank or cur_rank or "기자"
+                        extracted_dept = cur_dept or "본사"
+                    elif len(other_tokens) == 1:
+                        first = other_tokens[0]
+                        r_match = re.search(f"({RANK_REGEX_PATTERN})$", first)
+                        if r_match:
+                            extracted_rank = r_match.group(1)
+                            dept_part = first[:r_match.start()].strip()
                             if dept_part:
                                 if (extracted_rank.startswith("부장") or extracted_rank.startswith("차장") or extracted_rank.startswith("팀장")) and not dept_part.endswith("부") and not dept_part.endswith("팀"):
-                                    dept_part = dept_part + ("팀" if extracted_rank.startswith("팀장") else "부")
+                                    dept_part = dept_part + ("팀" if "팀" in extracted_rank else "부")
                                 extracted_dept = dept_part
+                            elif extracted_rank in EXECUTIVE_RANKS:
+                                extracted_dept = "본사"
                             else:
-                                extracted_dept = last_dept or "본사"
+                                extracted_dept = cur_dept or "본사"
                         elif first in RANK_HIERARCHY:
                             extracted_rank = first
-                            extracted_dept = last_dept or "본사"
+                            extracted_dept = "본사" if first in EXECUTIVE_RANKS else (cur_dept or "본사")
                         else:
                             extracted_dept = first
-                            extracted_rank = section_rank or "기자"
-                    last_dept = extracted_dept
-                    if extracted_rank and extracted_rank not in ["기자", "평기자"]:
-                        last_rank = extracted_rank
-                else:
-                    # 2개 이상 토큰이 남은 경우 (예: "건설부동산부" "부장", "편집국" "오피니언부", "편집국" "경제부" "차장")
-                    found_rank_idx = -1
-                    for r_i, tok in enumerate(other_tokens):
-                        if tok in RANK_HIERARCHY or re.search(f"({RANK_REGEX_PATTERN})$", tok):
-                            found_rank_idx = r_i
-                            break
-                    if found_rank_idx != -1:
-                        rank_tok = other_tokens[found_rank_idx]
-                        rank_m = re.search(f"({RANK_REGEX_PATTERN})$", rank_tok)
-                        if rank_m:
-                            extracted_rank = rank_m.group(1)
-                            prefix_dept = rank_tok[:rank_m.start()].strip()
-                            dept_tokens = list(other_tokens[:found_rank_idx])
-                            if prefix_dept:
-                                dept_tokens.append(prefix_dept)
-                            extracted_dept = " ".join(dept_tokens) if dept_tokens else (last_dept or "본사")
-                        else:
-                            extracted_rank = rank_tok
-                            dept_tokens = other_tokens[:found_rank_idx]
-                            extracted_dept = " ".join(dept_tokens) if dept_tokens else (last_dept or "본사")
+                            extracted_rank = section_rank or cur_rank or "기자"
                     else:
-                        # 직급 토큰이 없는 경우 (예: "건설부동산부" or "편집국" "오피니언부") -> 직급 언급이 없으므로 모두 '기자'
-                        extracted_dept = " ".join(other_tokens)
-                        extracted_rank = section_rank or "기자"
-                    last_dept = extracted_dept
-                    if extracted_rank and extracted_rank not in ["기자", "평기자"]:
-                        last_rank = extracted_rank
+                        full_str = " ".join(other_tokens)
+                        r_match = re.search(f"({RANK_REGEX_PATTERN})$", full_str)
+                        if r_match:
+                            extracted_rank = r_match.group(1)
+                            dept_part = full_str[:r_match.start()].strip()
+                            if dept_part:
+                                extracted_dept = dept_part
+                            elif extracted_rank in EXECUTIVE_RANKS:
+                                extracted_dept = "본사"
+                            else:
+                                extracted_dept = cur_dept or "본사"
+                        else:
+                            extracted_dept = full_str
+                            extracted_rank = section_rank or cur_rank or "기자"
 
-            # 3. 토큰이 1개로 붙어있는 경우 (예: "건설부동산부장김희준" or "홍길동정치부장")
+            # 5. 토큰이 1개로 붙어있는 경우 (예: "건설부동산부장김희준" or "홍길동정치부장")
             elif len(tokens) == 1:
                 single_str = tokens[0]
-                # 직급+이름 형태
                 match1 = re.search(f"({RANK_REGEX_PATTERN})([가-힣]{{2,4}})$", single_str)
-                # 이름+직급 형태
                 match2 = re.search(f"^([가-힣]{{2,4}})({RANK_REGEX_PATTERN})", single_str)
 
                 if match1 and cls.clean_name(match1.group(2)):
                     extracted_names = [match1.group(2)]
                     extracted_rank = match1.group(1)
-                    extracted_dept = single_str[:match1.start()].strip() or last_dept or "본사"
-                    last_dept = extracted_dept
+                    extracted_dept = single_str[:match1.start()].strip() or cur_dept or "본사"
                 elif match2 and cls.clean_name(match2.group(1)):
                     extracted_names = [match2.group(1)]
                     extracted_rank = match2.group(2)
-                    extracted_dept = single_str[match2.end():].strip() or last_dept or "본사"
-                    last_dept = extracted_dept
+                    extracted_dept = single_str[match2.end():].strip() or cur_dept or "본사"
+
+            if is_acting:
+                extracted_rank = f"{extracted_rank} 직무대행"
+
+            clean_dept = extracted_dept
+            for b in ["편집국 ", "보도국 ", "논설실 ", "디지털뉴스국 ", "신문총괄 "]:
+                if clean_dept.startswith(b) and len(clean_dept) > len(b):
+                    clean_dept = clean_dept[len(b):].strip()
+
+            if extracted_dept and extracted_dept != "본사":
+                cur_dept = extracted_dept
+                m_bur = re.search(r"([가-힣A-Za-z0-9]+(?:국|실|본부))", extracted_dept)
+                if m_bur:
+                    cur_bureau = m_bur.group(1).strip()
+
+            if extracted_rank and extracted_rank not in ["기자", "평기자"]:
+                cur_rank = extracted_rank
 
             for extracted_name in extracted_names:
                 final_media = normalize_media_name(media) if media else "미상"
                 if not is_media_organization(final_media):
-                    continue  # 언론사 인사소식만 정리 (비언론사 배제)
-
-                clean_dept = re.sub(r'^[△▲▷▶○●■□◆◇◈▣◎⊙◐◑·ㆍ\-\*―━“"”’‘\'〃\s]+|[“"”’‘\'〃\s]+$', '', extracted_dept).strip()
-                clean_dept = re.sub(r'[\s“"”’‘\'〃]+', ' ', clean_dept).strip()
-                if not clean_dept and last_dept:
-                    clean_dept = last_dept
-                clean_rank = re.sub(r"^[△▲▷▶○●■□◆◇◈▣◎⊙◐◑·ㆍ\-\*―━\s]+", "", extracted_rank).strip()
-                for bureau in ["편집국 ", "보도국 ", "논설실 ", "디지털뉴스국 ", "신문총괄 "]:
-                    if clean_dept.startswith(bureau) and len(clean_dept) > len(bureau):
-                        clean_dept = clean_dept[len(bureau):].strip()
-                if not clean_rank:
-                    clean_rank = "기자"
-                if clean_dept in ["산업", "정치", "경제", "사회", "문화", "국제", "금융", "증권", "건설부동산"]:
-                    clean_dept = clean_dept + ("팀" if "팀" in clean_rank else "부")
-
-                # 예능, 드라마 등 비보도 방송 제작 부서 제외
-                if is_excluded_department(clean_dept):
                     continue
 
-                rank_level = parse_rank_level(clean_rank)
-                domain = classify_domain(clean_dept)
+                clean_dept_item = re.sub(r'^[△▲▷▶○●■□◆◇◈▣◎⊙◐◑·ㆍ\-\*―━“"”’‘\'〃\s]+|[“"”’‘\'〃\s]+$', '', clean_dept).strip()
+                clean_dept_item = re.sub(r'[\s“"”’‘\'〃]+', ' ', clean_dept_item).strip()
+                if not clean_dept_item and cur_dept:
+                    clean_dept_item = cur_dept
+                clean_rank_item = re.sub(r"^[△▲▷▶○●■□◆◇◈▣◎⊙◐◑·ㆍ\-\*―━\s]+", "", extracted_rank).strip()
+                if not clean_rank_item:
+                    clean_rank_item = "기자"
+                if clean_dept_item in ["산업", "정치", "경제", "사회", "문화", "국제", "금융", "증권", "건설부동산"]:
+                    clean_dept_item = clean_dept_item + ("팀" if "팀" in clean_rank_item else "부")
+
+                # 부서가 본사/미지정이고 직급도 단순 기자인데 불릿이나 액션 헤더가 없었던 단문 노이즈는 제외
+                if clean_dept_item in ["본사", "미지정", ""] and clean_rank_item in ["기자", "평기자"] and not section_rank and not has_ditto and not action:
+                    continue
+
+                if is_excluded_department(clean_dept_item):
+                    continue
+
+                rank_level = parse_rank_level(clean_rank_item)
+                domain = classify_domain(clean_dept_item)
 
                 records.append({
                     "media": final_media,
-                    "dept": clean_dept,
+                    "dept": clean_dept_item,
                     "domain": domain,
-                    "rank_title": clean_rank,
+                    "rank_title": clean_rank_item,
                     "rank_level": rank_level,
                     "name": extracted_name,
                     "action_type": action,
@@ -1081,7 +1209,7 @@ class PersonnelRegexParser:
                     "raw_text": part
                 })
 
-        return records
+        return records, cur_dept, cur_rank, cur_bureau
 
 
 # ==========================================
