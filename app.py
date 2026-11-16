@@ -1322,9 +1322,7 @@ with tab_search:
                     dept = r.get('current_dept', '') or '부서 미표기'
                     rnk = r.get('current_rank', '') or ''
                     cnt = len(reporter_timelines.get(r['reporter_id'], []))
-                    all_d = format_dept_journey_str(reporter_timelines.get(r['reporter_id'], []))
-                    dept_lbl = f"{all_d}" if " ➔ " in all_d else dept
-                    rep_choice_labels.append(f"{r['name']} ({med} · {dept_lbl} {rnk} · 발령 {cnt}건)".strip())
+                    rep_choice_labels.append(f"{r['name']} ({med} · {dept} {rnk} · 발령 {cnt}건)".strip())
 
                 all_choice_label = f"전체 동명이인 함께 보기 (통합 {len(matched_reporters)}명)"
                 all_options = rep_choice_labels + [all_choice_label]
@@ -1734,39 +1732,49 @@ with tab_search:
                 st.dataframe(df_dept_reps, use_container_width=True, hide_index=True)
 
                 if len(filtered_reporters) > 1:
-                    if len(filtered_reporters) <= 10:
-                        rep_tab_labels = []
-                        for r in filtered_reporters:
-                            all_d = format_dept_journey_str(dept_timelines.get(r['reporter_id'], []))
-                            d_lbl = all_d if " ➔ " in all_d else (r.get('current_dept', '') or '부서 미표기')
-                            rep_tab_labels.append(f"{r['name']} ({d_lbl} {r.get('current_rank', '') or ''})".strip())
-                        rep_tabs = st.tabs(rep_tab_labels)
-                        for idx, r_item in enumerate(filtered_reporters):
-                            with rep_tabs[idx]:
-                                sel_rep = db.get_reporter(r_item["reporter_id"]) or r_item
-                                render_single_reporter_profile(sel_rep, dept_timelines.get(r_item["reporter_id"], []), db, key_suffix=f"dept_tab_{idx}")
-                    else:
-                        options_dict = {}
-                        for r in filtered_reporters:
-                            med = normalize_media_name(r.get('current_media', ''))
-                            dep = r.get('current_dept', '') or '부서 미표기'
-                            rnk = r.get('current_rank', '') or ''
-                            if r_val.strip() == "기자" and not any(m in rnk for m in ["부장", "차장", "국장", "부국장", "팀장", "실장", "본부장", "대표", "사장", "주필", "논설", "위원", "에디터", "데스크"]):
-                                rnk = "기자"
-                            cnt = len(dept_timelines.get(r['reporter_id'], []))
-                            all_d = format_dept_journey_str(dept_timelines.get(r['reporter_id'], []))
-                            dep_str = f"{all_d}" if " ➔ " in all_d else dep
-                            lbl = f"{r['name']} ({med} · {dep_str} {rnk} · 발령 {cnt}건)".strip()
-                            options_dict[lbl] = r["reporter_id"]
+                    # 이름 목록 구성 (이름만 나열, 동명이인이 있을 경우에만 최소 식별 정보 병기)
+                    name_counts = {}
+                    for r in filtered_reporters:
+                        nm = r.get("name", "").strip()
+                        name_counts[nm] = name_counts.get(nm, 0) + 1
 
-                        selected_label = st.selectbox(
-                            f"인물 상세 프로필 조회 (총 {len(filtered_reporters)}명 중 선택)",
-                            options=list(options_dict.keys()),
-                            key="sb_matched_reporters_dropdown"
+                    rep_name_labels = []
+                    rep_label_to_id = {}
+                    for idx, r in enumerate(filtered_reporters):
+                        nm = r.get("name", "").strip()
+                        if name_counts.get(nm, 1) > 1:
+                            lbl = f"{nm} ({r.get('current_dept', '') or r.get('current_rank', '') or f'인물 {idx+1}'})"
+                        else:
+                            lbl = nm
+                        if lbl in rep_label_to_id:
+                            lbl = f"{lbl} (#{idx+1})"
+                        rep_name_labels.append(lbl)
+                        rep_label_to_id[lbl] = r["reporter_id"]
+
+                    render_html('<div class="topic-section-divider"></div>')
+
+                    # 검색 모드 선택과 동일한 가로 라디오 버튼 디자인 적용
+                    radio_key = f"radio_dept_rep_{m_val}_{d_val}_{r_val}"
+                    if len(filtered_reporters) <= 25:
+                        selected_name_label = st.radio(
+                            "언론인 선택",
+                            options=rep_name_labels,
+                            horizontal=True,
+                            label_visibility="collapsed",
+                            index=0,
+                            key=radio_key
                         )
-                        sel_rep_id = options_dict[selected_label]
-                        sel_rep = next((r for r in filtered_reporters if r["reporter_id"] == sel_rep_id), None) or db.get_reporter(sel_rep_id)
-                        render_single_reporter_profile(sel_rep, dept_timelines.get(sel_rep_id, []), db, key_suffix="dept_sel")
+                    else:
+                        selected_name_label = st.selectbox(
+                            "언론인 선택",
+                            options=rep_name_labels,
+                            index=0,
+                            key=f"sb_dept_rep_{m_val}_{d_val}_{r_val}"
+                        )
+
+                    sel_rep_id = rep_label_to_id.get(selected_name_label, filtered_reporters[0]["reporter_id"])
+                    sel_rep = next((r for r in filtered_reporters if r["reporter_id"] == sel_rep_id), None) or db.get_reporter(sel_rep_id)
+                    render_single_reporter_profile(sel_rep, dept_timelines.get(sel_rep_id, []), db, key_suffix=f"dept_choice_{sel_rep_id}")
                 elif len(filtered_reporters) == 1:
                     rep_only = filtered_reporters[0]
                     render_single_reporter_profile(rep_only, dept_timelines.get(rep_only["reporter_id"], []), db, key_suffix="dept_single")
