@@ -170,7 +170,7 @@ STOPWORDS = {
 MEDIA_GROUP_ALIASES: Dict[str, List[str]] = {
     "중앙일보": ["중앙그룹", "중앙홀딩스", "중앙미디어", "중앙일보S", "JTBC", "월간중앙", "일간스포츠", "이코노미스트"],
     "동아일보": ["동아미디어그룹"],
-    "매일경제": ["매경미디어그룹", "매경미디어"],
+    "매일경제": ["매경", "매일경제신문", "매일경제신문사", "매경미디어그룹", "매경미디어", "매경닷컴", "매경비즈", "매경AX"],
     "한국경제": ["한경미디어그룹", "한경닷컴", "한경비즈니스", "한경매거진"],
     "조선일보": ["조선미디어그룹"],
     "헤럴드경제": ["헤럴드", "헤럴드미디어"],
@@ -362,7 +362,7 @@ KNOWN_MEDIA_NAMES: set = {
     "한국일보", "문화일보", "세계일보", "국민일보", "서울신문", "내일신문",
     "ytn", "YTN", "kbs", "KBS", "mbc", "MBC", "sbs", "SBS", "jtbc", "JTBC", "mbn", "MBN",
     "tv조선", "TV조선", "채널a", "채널A", "연합뉴스TV", "연합뉴스tv",
-    "한경", "매경", "서경", "아경", "매일경제", "한국경제", "서울경제", "아시아경제", "헤럴드경제",
+    "한경", "매경", "서경", "아경", "매일경제", "매일경제신문", "매일경제신문사", "매경미디어그룹", "매경미디어", "매경닷컴", "매경비즈", "한국경제", "서울경제", "아시아경제", "헤럴드경제",
     "아시아투데이", "파이낸셜뉴스", "이투데이", "뉴스토마토", "머니s", "머니S", "블로터", "더벨", "비즈한국",
     "비즈니스워치", "비즈워치", "글로벌이코노믹", "신아일보", "아주경제", "브릿지경제", "한국정경신문", "스마트에프엔",
     "fetv", "뉴스핌", "뉴스웨이", "뉴스포스트", "메트로신문", "에너지경제", "미디어펜", "미디어오늘", "pd저널", "PD저널",
@@ -792,12 +792,15 @@ class PersonnelRegexParser:
                             if not f_rank:
                                 f_rank = rec.get("rank_title", "기자")
                             
+                            f_rank_lvl = RANK_SCORES.get(f_rank, 1) if "RANK_SCORES" in globals() else 1
                             results.append({
                                 "name": rec["name"],
                                 "media": rec["media"],
                                 "dept": f_dept,
                                 "rank_title": f_rank,
+                                "rank_level": f_rank_lvl,
                                 "domain": classify_domain(f_dept),
+                                "email": rec.get("email", ""),
                                 "pub_date": pub_date or str(datetime.date.today()),
                                 "action_type": f"전보 (이전 소속: {f_dept})",
                                 "article_title": article_title or "",
@@ -997,6 +1000,9 @@ class PersonnelTrackerEngine:
     """
 
     def __init__(self, db_path: str = "media_tracker.db"):
+        if not os.path.isabs(db_path):
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            db_path = os.path.join(base_dir, db_path)
         self.db = MediaDatabase(db_path)
 
     def process_records(self, raw_records: List[Dict[str, Any]], append: bool = True) -> Dict[str, Any]:
@@ -1122,12 +1128,12 @@ class PersonnelTrackerEngine:
         """
         단일 레코드에 대해 기존 클러스터 매칭 여부를 검증하고, 일치하는 클러스터가 없으면 신규 클러스터를 생성합니다.
         """
-        name = record["name"]
-        rec_media = normalize_media_name(record["media"])
-        rec_dept = record["dept"]
-        rec_domain = record["domain"]
-        rec_rank = record["rank_title"]
-        rec_level = record["rank_level"]
+        name = str(record.get("name", "")).strip()
+        rec_media = normalize_media_name(record.get("media", ""))
+        rec_dept = str(record.get("dept", "")).strip()
+        rec_domain = str(record.get("domain", "")).strip()
+        rec_rank = str(record.get("rank_title", "")).strip()
+        rec_level = record.get("rank_level") or RANK_SCORES.get(rec_rank, 1)
         rec_date_str = str(record.get("pub_date", "2020-01-01"))
         rec_email = record.get("email", "").strip()
 
@@ -1993,6 +1999,11 @@ class OnlineNewsTracker:
                     km_tokens = [matched_km]
                     if matched_km in MEDIA_GROUP_ALIASES:
                         km_tokens.extend(MEDIA_GROUP_ALIASES[matched_km])
+                    for base, alist in MEDIA_GROUP_ALIASES.items():
+                        if matched_km == base or matched_km in alist:
+                            km_tokens.append(base)
+                            km_tokens.extend(alist)
+                    km_tokens = list(set(km_tokens))
                     if not any(tok in clean_title for tok in km_tokens):
                         if pr and is_same_media_company(pr, matched_km):
                             pass
@@ -2106,60 +2117,70 @@ class OnlineNewsTracker:
                     nso_sort = "so:dd" if n_sort == "1" else "so:r"
                     start_param = f"&start={start_idx}" if start_idx > 1 else ""
 
-                    # 1) PC 검색 (SDS 레이아웃 카드 지원)
+                    # 1) PC 검색 (SDS 레이아웃 및 클래식 레이아웃 지원)
                     pc_url = f"https://search.naver.com/search.naver?where=news&query={quote(wq)}&sort={n_sort}&ds={start_year}.01.01&de={end_year}.12.31&nso={nso_sort},p:from{start_year}0101to{end_year}1231,a:all{start_param}"
-                    resp_pc = cls.get_session().get(pc_url, headers=cls.HEADERS, timeout=3.5, verify=False)
+                    resp_pc = cls.get_session().get(pc_url, headers=cls.HEADERS, timeout=4.0, verify=False)
                     if resp_pc.status_code == 200:
                         soup_pc = BeautifulSoup(resp_pc.content, "html.parser")
-                        cards = soup_pc.find_all("div", class_=lambda c: c and any(k in c for k in ["sds-comps", "news_wrap", "bx", "rFpROc3sT6Izewfc"]))
-                        for card in cards:
-                            press_name = ""
-                            for a in card.find_all("a"):
+                        tit_anchors = soup_pc.select("a.W5fYO2_0xMDeLrlx, a.news_tit")
+                        if not tit_anchors:
+                            for a in soup_pc.find_all("a"):
                                 h = a.get("href", "")
-                                t = a.get_text(strip=True).replace("새 창 열림", "").strip()
-                                if ("/press/" in h or "media.naver.com" in h) and t:
-                                    press_name = t
-                                    break
-
-                            target_title = ""
-                            naver_url = ""
-                            origin_url = ""
-
-                            for a in card.find_all("a"):
-                                h = a.get("href", "")
-                                t = a.get_text(strip=True).replace("새 창 열림", "").strip()
-                                if not h or not t or "keep.naver.com" in h or h.startswith("#") or "javascript:" in h or "/press/" in h:
-                                    continue
-                                if "news.naver.com" in h:
-                                    naver_url = h
+                                t = a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
+                                if not h or not t or "keep.naver.com" in h or "/press/" in h:
                                     continue
                                 if is_personnel_article_title(t, url=h):
-                                    target_title = t
-                                    origin_url = h
+                                    tit_anchors.append(a)
 
-                            if target_title:
-                                final_url = naver_url or origin_url
-                                if final_url and final_url not in seen_urls:
-                                    p_guess = press_name
-                                    if not p_guess:
-                                        if "article/421/" in final_url or "news1.kr" in final_url:
-                                            p_guess = "뉴스1"
-                                        elif "article/001/" in final_url or "yna.co.kr" in final_url:
-                                            p_guess = "연합뉴스"
-                                        elif "article/025/" in final_url or "joongang.co.kr" in final_url:
-                                            p_guess = "중앙일보"
-                                        elif "journalist.or.kr" in final_url:
-                                            p_guess = "한국기자협회"
-                                    if is_valid_wire_article(target_title, final_url, p_guess):
-                                        seen_urls.add(final_url)
-                                        articles.append({
-                                            "title": target_title,
-                                            "url": final_url,
-                                            "media": p_guess,
-                                            "date_text": ""
-                                        })
-                                        if len(articles) >= max_items:
-                                            break
+                        for tit_a in tit_anchors:
+                            target_title = tit_a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
+                            origin_url = tit_a.get("href", "")
+                            if not target_title or not origin_url:
+                                continue
+
+                            # 상위 카드 컨테이너 탐색
+                            p = tit_a.parent
+                            card = None
+                            for _ in range(6):
+                                if not p:
+                                    break
+                                if p.find("a", href=lambda h: h and ("/press/" in h or "media.naver.com" in h)) or p.find("a", class_=lambda c: c and "Zq2aiciJOBY5v64y" in c):
+                                    card = p
+                                    break
+                                p = p.parent
+
+                            press_name = ""
+                            naver_url = ""
+                            if card:
+                                press_a = card.find("a", href=lambda h: h and ("/press/" in h or "media.naver.com" in h)) or card.find("a", class_=lambda c: c and "Zq2aiciJOBY5v64y" in c)
+                                if press_a:
+                                    press_name = press_a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
+                                nav_a = card.find("a", href=lambda h: h and "news.naver.com" in h)
+                                if nav_a:
+                                    naver_url = nav_a.get("href", "")
+
+                            final_url = naver_url or origin_url
+                            if final_url and final_url not in seen_urls:
+                                p_guess = press_name
+                                if not p_guess:
+                                    if "article/421/" in final_url or "news1.kr" in final_url:
+                                        p_guess = "뉴스1"
+                                    elif "article/001/" in final_url or "yna.co.kr" in final_url:
+                                        p_guess = "연합뉴스"
+                                    elif "article/025/" in final_url or "joongang.co.kr" in final_url:
+                                        p_guess = "중앙일보"
+                                    elif "journalist.or.kr" in final_url:
+                                        p_guess = "한국기자협회"
+                                if is_valid_wire_article(target_title, final_url, p_guess):
+                                    seen_urls.add(final_url)
+                                    articles.append({
+                                        "title": target_title,
+                                        "url": final_url,
+                                        "media": p_guess,
+                                        "date_text": ""
+                                    })
+                                    if len(articles) >= max_items:
+                                        break
 
                     # 2) 모바일 검색 보조
                     naver_url = f"https://m.search.naver.com/search.naver?where=m_news&query={quote(wq)}&sort={n_sort}&ds={start_year}.01.01&de={end_year}.12.31&nso={nso_sort},p:from{start_year}0101to{end_year}1231,a:all{start_param}"
@@ -2413,8 +2434,10 @@ class OnlineNewsTracker:
         if full_history:
             intervals = [
                 (2024, 2026, "date"),
-                (2019, 2023, "date"),
-                (1965, 2018, "sim")
+                (2020, 2023, "date"),
+                (2015, 2019, "sim"),
+                (2010, 2014, "sim"),
+                (1965, 2009, "sim")
             ]
             sec_pages = 2
         else:
@@ -2647,8 +2670,10 @@ class OnlineNewsTracker:
         if full_history:
             intervals = [
                 (2024, 2026, "date"),
-                (2019, 2023, "date"),
-                (1965, 2018, "sim")
+                (2020, 2023, "date"),
+                (2015, 2019, "sim"),
+                (2010, 2014, "sim"),
+                (1965, 2009, "sim")
             ]
             sec_pages = 2
         else:
@@ -2692,13 +2717,14 @@ class OnlineNewsTracker:
             elif media_clean:
                 q_list.extend([
                     f'[인사] {media_clean}',
+                    f'"{media_clean}" [인사]',
                     f'{media_clean} [인사] 연합뉴스',
                     f'{media_clean} [인사] 뉴스1',
-                    f'{media_clean} [인사] 중앙일보',
                 ])
                 if media_clean in MEDIA_GROUP_ALIASES:
-                    for g_alias in MEDIA_GROUP_ALIASES[media_clean][:2]:
+                    for g_alias in MEDIA_GROUP_ALIASES[media_clean][:4]:
                         q_list.append(f'[인사] {g_alias}')
+                        q_list.append(f'"{g_alias}" [인사]')
             elif rank_clean and dept_clean:
                 q_list.extend([
                     f'"{dept_clean}" "{rank_clean}" [인사] 뉴스1',
@@ -2790,6 +2816,11 @@ class OnlineNewsTracker:
                 allowed_media_tokens = [media_clean]
                 if media_clean in MEDIA_GROUP_ALIASES:
                     allowed_media_tokens.extend(MEDIA_GROUP_ALIASES[media_clean])
+                for base, alist in MEDIA_GROUP_ALIASES.items():
+                    if media_clean == base or media_clean in alist:
+                        allowed_media_tokens.append(base)
+                        allowed_media_tokens.extend(alist)
+                allowed_media_tokens = list(set(allowed_media_tokens))
                 if media_clean and not any(tok in body or tok in art.get("title", "") for tok in allowed_media_tokens):
                     return None
                 if not media_clean and dept_clean and dept_clean not in body and dept_clean not in art.get("title", ""):
@@ -2837,7 +2868,7 @@ class OnlineNewsTracker:
                 elif is_same_media_company(media_clean, rec_med):
                     is_target_media = True
                     r["media"] = normalize_media_name(media_clean)
-                elif rec_med in ["온라인뉴스", "미상", ""] and media_clean in art.get("title", "") and not any(kw in art.get("title", "") for kw in ["종합", "외", "등", "동향"]):
+                elif rec_med in ["온라인뉴스", "미상", ""] and any(tok in art.get("title", "") for tok in allowed_media_tokens) and not any(kw in art.get("title", "") for kw in ["종합", "외", "등", "동향"]):
                     is_target_media = True
                     r["media"] = normalize_media_name(media_clean)
 
@@ -2971,8 +3002,10 @@ class OnlineNewsTracker:
         if full_history:
             intervals = [
                 (2024, 2026, "date"),
-                (2019, 2023, "date"),
-                (1965, 2018, "sim")
+                (2020, 2023, "date"),
+                (2015, 2019, "sim"),
+                (2010, 2014, "sim"),
+                (1965, 2009, "sim")
             ]
             sec_pages = 2
         else:
@@ -3057,6 +3090,11 @@ class OnlineNewsTracker:
                 allowed_media_tokens = [media_clean]
                 if media_clean in MEDIA_GROUP_ALIASES:
                     allowed_media_tokens.extend(MEDIA_GROUP_ALIASES[media_clean])
+                for base, alist in MEDIA_GROUP_ALIASES.items():
+                    if media_clean == base or media_clean in alist:
+                        allowed_media_tokens.append(base)
+                        allowed_media_tokens.extend(alist)
+                allowed_media_tokens = list(set(allowed_media_tokens))
                 if media_clean and not any(tok in body or tok in art.get("title", "") for tok in allowed_media_tokens):
                     return None
                 return art, fetched
@@ -3362,6 +3400,9 @@ class MediaDatabase:
     """
 
     def __init__(self, db_path: str = "media_tracker.db", auto_seed: bool = True):
+        if not os.path.isabs(db_path):
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            db_path = os.path.join(base_dir, db_path)
         self.db_path = db_path
         self._init_db()
         if auto_seed:
