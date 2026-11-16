@@ -11,6 +11,7 @@ Streamlit 기반 '언론사 인사 트래커 (Media Personnel Tracker)'
 import os
 import io
 import time
+import json
 import datetime
 import threading
 import base64
@@ -529,34 +530,46 @@ def render_html(html_content: str):
 DB_FILE = "media_tracker.db"
 db = MediaDatabase(DB_FILE)
 
-# 일일 자동 증분 동기화 (당일 최초 접속 시 백그라운드 1회 자동 수집)
+# 일일 자동 증분 동기화 (당일 최초 접속 시 백그라운드 스레드 비동기 실행)
 def check_and_run_daily_auto_sync():
-    sync_meta_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "last_sync.json")
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    already_synced = False
     try:
+        sync_meta_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "last_sync.json")
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        already_synced = False
         if os.path.exists(sync_meta_path):
-            with open(sync_meta_path, "r", encoding="utf-8") as f:
-                sync_meta = json.load(f)
-                if sync_meta.get("last_sync_date") == today_str:
-                    already_synced = True
+            try:
+                with open(sync_meta_path, "r", encoding="utf-8") as f:
+                    sync_meta = json.load(f)
+                    if sync_meta.get("last_sync_date") == today_str:
+                        already_synced = True
+            except Exception:
+                pass
+
+        if not already_synced:
+            def _async_bg_sync():
+                try:
+                    res = OnlineNewsTracker.fetch_latest_online_personnel(max_articles=10)
+                    os.makedirs(os.path.dirname(sync_meta_path), exist_ok=True)
+                    with open(sync_meta_path, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "last_sync_date": today_str,
+                            "updated_at": datetime.datetime.now().isoformat(),
+                            "result": res.get("message", "")
+                        }, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+
+            t = threading.Thread(target=_async_bg_sync, daemon=True)
+            t.start()
     except Exception:
         pass
 
-    if not already_synced:
-        try:
-            res = OnlineNewsTracker.fetch_latest_online_personnel(max_articles=10)
-            os.makedirs(os.path.dirname(sync_meta_path), exist_ok=True)
-            with open(sync_meta_path, "w", encoding="utf-8") as f:
-                json.dump({"last_sync_date": today_str, "updated_at": datetime.now().isoformat(), "result": res.get("message", "")}, f, ensure_ascii=False, indent=2)
-            if res.get("found_records", 0) > 0:
-                st.session_state["upload_banner"] = f"[일일 자동 동기화] {today_str} 신규 발령 {res.get('found_records', 0)}건이 자동으로 DB에 추가되었습니다."
-        except Exception:
-            pass
-
-if "daily_sync_checked" not in st.session_state:
-    st.session_state["daily_sync_checked"] = True
-    check_and_run_daily_auto_sync()
+try:
+    if "daily_sync_checked" not in st.session_state:
+        st.session_state["daily_sync_checked"] = True
+        check_and_run_daily_auto_sync()
+except Exception:
+    pass
 
 stats = db.get_stats()
 
