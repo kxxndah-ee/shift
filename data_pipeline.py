@@ -625,6 +625,56 @@ KNOWN_MEDIA_NAMES: set = {
     "평화신문", "가톨릭평화신문", "법보신문", "불교신문", "국방일보"
 }
 
+
+def parse_composite_search_query(q: str) -> Dict[str, str]:
+    """
+    '한국경제 건설부동산 부장', '헤럴드경제 김동호', '건설부동산 부장' 등
+    복합 검색어를 입력했을 때 매체명, 부서명, 직급명, 기자명을 자동 분리합니다.
+    """
+    q = q.strip()
+    if not q:
+        return {"media": "", "dept": "", "rank": "", "name": ""}
+
+    media, dept, rank, name = "", "", "", ""
+    remainder = q
+
+    # 1. 매체명 접두사 감지
+    for km in sorted(KNOWN_MEDIA_NAMES, key=len, reverse=True):
+        if remainder.startswith(km) and (len(remainder) == len(km) or remainder[len(km)] in (" ", "·", "-", "_")):
+            media = km
+            remainder = remainder[len(km):].strip(" ·-_")
+            break
+        elif remainder == km:
+            media = km
+            remainder = ""
+            break
+
+    # 2. 직급명 감지
+    ranks = [
+        "논설주간", "논설위원", "전문기자", "본부장", "부국장", "선임기자", 
+        "국장", "부장대우", "부장", "차장대우", "차장", "팀장", "위원", 
+        "대표이사", "대표", "사장", "이사", "상무", "전무", "기자"
+    ]
+    for r in ranks:
+        if r in remainder:
+            rank = r
+            remainder = re.sub(rf"\b{r}\b|\s*{r}", "", remainder).strip()
+            break
+
+    # 3. 부서명 vs 기자명 분리
+    if remainder:
+        if (
+            any(remainder.endswith(suffix) for suffix in ["부", "팀", "국", "실", "센터", "단", "소", "데스크"])
+            or remainder in ["건설부동산", "부동산", "정치", "경제", "사회", "산업", "금융", "증권", "IT", "문화", "국제", "유통", "생활경제", "바이오", "테크"]
+        ):
+            dept = remainder
+        elif len(remainder) in (2, 3, 4) and re.match(r"^[가-힣]+$", remainder):
+            name = remainder
+        else:
+            dept = remainder
+
+    return {"media": media, "dept": dept, "rank": rank, "name": name}
+
 NON_MEDIA_KEYWORDS: List[str] = [
     "인사혁신처", "법제처", "보훈처", "연구단", "사업단", "연구실", "추진단", "사업본부", "정보통신", "통신기술", "소프트웨어", "엔터테인먼트",
     "경기대", "서울대", "연세대", "고려대",
