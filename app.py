@@ -508,11 +508,22 @@ st.markdown("""
 # ==========================================
 
 def get_secret(key: str, default: str = "") -> str:
-    """Streamlit Secrets 또는 환경 변수에서 값을 안전하게 조회합니다."""
+    """Streamlit Secrets 또는 환경 변수에서 값을 안전하게 조회하며 기본 API 키를 보장합니다."""
     try:
-        return st.secrets.get(key, default)
+        if hasattr(st, "secrets") and key in st.secrets:
+            val = st.secrets[key]
+            if val:
+                return str(val)
     except Exception:
-        return os.environ.get(key, default)
+        pass
+    env_v = os.environ.get(key, "")
+    if env_v:
+        return env_v
+    defaults = {
+        "naver_client_id": "xsrq0bh1hc",
+        "naver_client_secret": "i6gooD4bp87onYOZ9jCDlyioIIsNdGyGznO6XXgQ"
+    }
+    return defaults.get(key, default)
 
 
 def render_html(html_content: str):
@@ -551,7 +562,7 @@ def display_search_progress(
     검색 진행률(검색률: 10% -> 35% -> 70% -> 90% -> 100%)을 시각적으로 안내합니다.
     """
     p_bar = placeholder.progress(10, text="검색 시작 : 검색어 정규화 및 토큰 분석 중 (검색률: 10%)")
-    time.sleep(0.04)
+    time.sleep(0.02)
     p_bar.progress(35, text="포털 실시간 최신 인사 기사 동기화 및 마스터 DB 색인 탐색 중 (검색률: 35%)")
     
     if online_sync_fn:
@@ -567,13 +578,13 @@ def display_search_progress(
             pass
 
     p_bar.progress(70, text="언론사 계열/별칭 그룹 매칭 및 이직·승진 타임라인 교차 검증 중 (검색률: 70%)")
-    time.sleep(0.06)
+    time.sleep(0.02)
     p_bar.progress(90, text="검색 결과 정밀 필터링 및 랭킹 정렬 중 (검색률: 90%)")
-    time.sleep(0.04)
+    time.sleep(0.02)
     
     result_text = f"검색 완료 (검색률: 100%) : '{target_desc}' 발령 기록 {total_found}건 확인" if target_desc else f"검색 완료 (검색률: 100%) : 총 {total_found}건 확인"
     p_bar.progress(100, text=result_text)
-    time.sleep(0.18)
+    time.sleep(0.08)
     placeholder.empty()
     return total_found
 

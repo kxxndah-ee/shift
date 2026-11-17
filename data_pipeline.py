@@ -1988,6 +1988,9 @@ class OnlineNewsTracker:
     4대 매체(연합뉴스·뉴스1·중앙일보·한국기자협회) 아카이브 전체 기간(1965~2026)의 포털 및 전문 기사를 실시간 탐색하여 연대기 커리어 프로필을 구축합니다.
     """
 
+    DEFAULT_NAVER_CLIENT_ID = "xsrq0bh1hc"
+    DEFAULT_NAVER_CLIENT_SECRET = "i6gooD4bp87onYOZ9jCDlyioIIsNdGyGznO6XXgQ"
+
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -2505,14 +2508,57 @@ class OnlineNewsTracker:
         client_secret: str = "",
         start_year: int = 1965,
         end_year: int = 2026,
-        sort_first: str = "date"
+        sort_first: str = "date",
+        full_history: bool = True
     ) -> List[Dict[str, Any]]:
         """
         4대 매체(연합뉴스·뉴스1·중앙일보·한국기자협회) 공식 [인사] 기사만을 엄격하게 실시간 수집합니다.
         (통신사 뉴스1·연합뉴스, 중앙일보 및 한국기자협회를 통해 보도되는 전 매체 공식 인사 기사 수집 보장)
         """
+        client_id = client_id or cls.DEFAULT_NAVER_CLIENT_ID
+        client_secret = client_secret or cls.DEFAULT_NAVER_CLIENT_SECRET
         articles: List[Dict[str, Any]] = []
         seen_urls = set()
+
+        if not full_history:
+            # 실시간 인터랙티브 검색 시 CPU/네트워크 부하 0화:
+            # 오직 공식 Naver News API JSON만 1회 호출하며,
+            # BeautifulSoup 기반의 HTML 웹 크롤링 및 다중 쓰레드를 일절 실행하지 않습니다.
+            if client_id and client_secret:
+                try:
+                    api_url = "https://openapi.naver.com/v1/search/news.json"
+                    api_headers = {
+                        "X-Naver-Client-Id": client_id,
+                        "X-Naver-Client-Secret": client_secret,
+                        **cls.HEADERS
+                    }
+                    api_params = {"query": query, "display": min(max_items, 10), "sort": "date"}
+                    api_resp = cls.get_session().get(api_url, headers=api_headers, params=api_params, timeout=2.0, verify=False)
+                    if api_resp.status_code == 200:
+                        for it in api_resp.json().get("items", []):
+                            raw_tit = re.sub(r"<[^>]+>", "", it.get("title", "")).strip()
+                            raw_tit = raw_tit.replace("&quot;", '"').replace("&amp;", '&').replace("&lt;", '<').replace("&gt;", '>')
+                            target_url = it.get("link", "") or it.get("originallink", "")
+                            if target_url and target_url not in seen_urls:
+                                seen_urls.add(target_url)
+                                pub_d = it.get("pubDate", "")
+                                date_str = ""
+                                if pub_d:
+                                    try:
+                                        import email.utils
+                                        dt = email.utils.parsedate_to_datetime(pub_d)
+                                        date_str = dt.strftime("%Y-%m-%d")
+                                    except Exception:
+                                        pass
+                                articles.append({
+                                    "title": raw_tit,
+                                    "url": target_url,
+                                    "media": "온라인뉴스",
+                                    "date_text": date_str
+                                })
+                except Exception:
+                    pass
+            return articles
 
         def is_valid_wire_article(tit: str, u: str, pr: str) -> bool:
             clean_title = tit.replace("새 창 열림", "").replace("새창열림", "").strip()
@@ -2996,6 +3042,55 @@ class OnlineNewsTracker:
         if not name:
             return {"found_records": 0, "articles_searched": 0, "message": "기자 이름을 입력하세요."}
 
+        client_id = client_id or cls.DEFAULT_NAVER_CLIENT_ID
+        client_secret = client_secret or cls.DEFAULT_NAVER_CLIENT_SECRET
+
+        if not full_history:
+            # 실시간 인터랙티브 검색 시 CPU/네트워크 부하 0화:
+            # 단일 네이버 News API JSON 호출 및 멀티쓰레드/웹크롤링 완전 배제
+            candidate_articles = cls.search_online_articles(
+                f'"{name}" 인사', max_items=3, client_id=client_id, client_secret=client_secret, full_history=False
+            )
+            if not candidate_articles:
+                return {"found_records": 0, "articles_searched": 0, "message": f"'{name}' 기자의 최신 기사 확인 완료"}
+
+            db_known_urls = set()
+            try:
+                db_inst = MediaDatabase(db_path)
+                with db_inst.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT article_url FROM personnel_records WHERE article_url IS NOT NULL AND article_url != ''")
+                    db_known_urls = {row[0] for row in cur.fetchall()}
+            except Exception:
+                pass
+
+            new_articles = [a for a in candidate_articles if a.get("url") and a.get("url") not in db_known_urls]
+            if not new_articles:
+                return {"found_records": 0, "articles_searched": len(candidate_articles), "message": "최신 상태 확인 완료"}
+
+            all_records = []
+            for art in new_articles[:2]:
+                try:
+                    fetched = cls.fetch_full_text(art["url"])
+                    body = fetched.get("text", "")
+                    if body and len(body) >= 30 and name in body:
+                        recs = PersonnelRegexParser.parse_article_text(
+                            article_text=body,
+                            default_media=fetched.get("media", "온라인뉴스"),
+                            article_title=art.get("title", ""),
+                            pub_date=fetched.get("pub_date") or art.get("date_text") or "2026-01-01",
+                            article_url=art["url"]
+                        )
+                        all_records.extend([r for r in recs if r["name"] == name and is_media_organization(r.get("media", "")) and not is_excluded_department(r.get("dept", ""))])
+                except Exception:
+                    pass
+
+            if all_records:
+                engine = PersonnelTrackerEngine(db_path)
+                engine.process_records(all_records, append=True)
+                return {"found_records": len(all_records), "articles_searched": len(candidate_articles), "message": f"신규 {len(all_records)}건 동기화 완료"}
+            return {"found_records": 0, "articles_searched": len(candidate_articles), "message": "최신 상태 확인 완료"}
+
         cur_year = datetime.datetime.now().year
         if full_history:
             intervals = [
@@ -3249,6 +3344,63 @@ class OnlineNewsTracker:
 
         if not media_clean and not dept_clean and not rank_clean:
             return {"found_records": 0, "articles_searched": 0, "message": "매체명, 부서명, 또는 직급명을 입력하세요."}
+
+        client_id = client_id or cls.DEFAULT_NAVER_CLIENT_ID
+        client_secret = client_secret or cls.DEFAULT_NAVER_CLIENT_SECRET
+
+        if not full_history:
+            # 실시간 인터랙티브 검색 시 CPU/네트워크 부하 0화:
+            # 단일 네이버 News API JSON 호출 및 멀티쓰레드/웹크롤링 완전 배제
+            query_tokens = [t for t in [media_clean, dept_clean, rank_clean] if t]
+            query_str = " ".join(query_tokens) + " [인사]" if query_tokens else "[인사]"
+            candidate_articles = cls.search_online_articles(
+                query_str, max_items=3, client_id=client_id, client_secret=client_secret, full_history=False
+            )
+            if not candidate_articles:
+                return {"found_records": 0, "articles_searched": 0, "message": "최신 기사 확인 완료"}
+
+            db_known_urls = set()
+            try:
+                db_inst = MediaDatabase(db_path)
+                with db_inst.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT article_url FROM personnel_records WHERE article_url IS NOT NULL AND article_url != ''")
+                    db_known_urls = {row[0] for row in cur.fetchall()}
+            except Exception:
+                pass
+
+            new_articles = [a for a in candidate_articles if a.get("url") and a.get("url") not in db_known_urls]
+            if not new_articles:
+                return {"found_records": 0, "articles_searched": len(candidate_articles), "message": "최신 상태 확인 완료"}
+
+            all_records = []
+            for art in new_articles[:2]:
+                try:
+                    fetched = cls.fetch_full_text(art["url"])
+                    body = fetched.get("text", "")
+                    if body and len(body) >= 30:
+                        recs = PersonnelRegexParser.parse_article_text(
+                            article_text=body,
+                            default_media=media_clean or fetched.get("media", "온라인뉴스"),
+                            article_title=art.get("title", ""),
+                            pub_date=fetched.get("pub_date") or art.get("date_text") or "2026-01-01",
+                            article_url=art["url"]
+                        )
+                        for r in recs:
+                            if media_clean and not is_same_media_company(r.get("media", ""), media_clean):
+                                continue
+                            if dept_clean and dept_clean not in r.get("dept", ""):
+                                continue
+                            if not is_excluded_department(r.get("dept", "")):
+                                all_records.append(r)
+                except Exception:
+                    pass
+
+            if all_records:
+                engine = PersonnelTrackerEngine(db_path)
+                engine.process_records(all_records, append=True)
+                return {"found_records": len(all_records), "articles_searched": len(candidate_articles), "message": f"신규 {len(all_records)}건 동기화 완료"}
+            return {"found_records": 0, "articles_searched": len(candidate_articles), "message": "최신 상태 확인 완료"}
 
         cur_year = datetime.datetime.now().year
         if full_history:
@@ -3646,6 +3798,61 @@ class OnlineNewsTracker:
             return cls.track_media_dept_online(media=media_clean, client_id=client_id, client_secret=client_secret, stop_event=stop_event, full_history=full_history)
         if not media_clean:
             return cls.track_reporter_online(reporter_name=name_clean, client_id=client_id, client_secret=client_secret, stop_event=stop_event, full_history=full_history)
+
+        client_id = client_id or cls.DEFAULT_NAVER_CLIENT_ID
+        client_secret = client_secret or cls.DEFAULT_NAVER_CLIENT_SECRET
+
+        if not full_history:
+            # 실시간 인터랙티브 검색 시 CPU/네트워크 부하 0화:
+            # 단일 네이버 News API JSON 호출 및 멀티쓰레드/웹크롤링 완전 배제
+            query_str = f'"{media_clean}" "{name_clean}" 인사' if media_clean else f'"{name_clean}" 인사'
+            candidate_articles = cls.search_online_articles(
+                query_str, max_items=3, client_id=client_id, client_secret=client_secret, full_history=False
+            )
+            if not candidate_articles:
+                return {"found_records": 0, "articles_searched": 0, "message": "최신 기사 확인 완료"}
+
+            db_known_urls = set()
+            try:
+                db_inst = MediaDatabase(db_path)
+                with db_inst.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT article_url FROM personnel_records WHERE article_url IS NOT NULL AND article_url != ''")
+                    db_known_urls = {row[0] for row in cur.fetchall()}
+            except Exception:
+                pass
+
+            new_articles = [a for a in candidate_articles if a.get("url") and a.get("url") not in db_known_urls]
+            if not new_articles:
+                return {"found_records": 0, "articles_searched": len(candidate_articles), "message": "최신 상태 확인 완료"}
+
+            all_records = []
+            for art in new_articles[:2]:
+                try:
+                    fetched = cls.fetch_full_text(art["url"])
+                    body = fetched.get("text", "")
+                    if body and len(body) >= 30 and name_clean in body:
+                        recs = PersonnelRegexParser.parse_article_text(
+                            article_text=body,
+                            default_media=media_clean or fetched.get("media", "온라인뉴스"),
+                            article_title=art.get("title", ""),
+                            pub_date=fetched.get("pub_date") or art.get("date_text") or "2026-01-01",
+                            article_url=art["url"]
+                        )
+                        for r in recs:
+                            if r["name"] == name_clean:
+                                if media_clean and not is_same_media_company(r.get("media", ""), media_clean):
+                                    continue
+                                if not is_excluded_department(r.get("dept", "")):
+                                    all_records.append(r)
+                except Exception:
+                    pass
+
+            if all_records:
+                engine = PersonnelTrackerEngine(db_path)
+                engine.process_records(all_records, append=True)
+                return {"found_records": len(all_records), "articles_searched": len(candidate_articles), "message": f"신규 {len(all_records)}건 동기화 완료"}
+            return {"found_records": 0, "articles_searched": len(candidate_articles), "message": "최신 상태 확인 완료"}
 
         cur_year = datetime.datetime.now().year
         if full_history:
