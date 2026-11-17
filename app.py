@@ -540,7 +540,13 @@ def render_html(html_content: str):
 # ==========================================
 
 DB_FILE = "media_tracker.db"
-db = MediaDatabase(DB_FILE)
+
+# Streamlit Community Cloud 자원 최적화: 싱글톤 DB 연결 캐싱
+@st.cache_resource
+def get_database() -> MediaDatabase:
+    return MediaDatabase(DB_FILE, auto_seed=True)
+
+db = get_database()
 
 # Streamlit Community Cloud CPU 자원 최적화 캐싱 (10분 캐시 유지)
 @st.cache_data(ttl=600)
@@ -599,7 +605,7 @@ def render_search_completion_indicator(total_records: int, total_reporters: int 
     <div style="display:flex; align-items:center; justify-content:space-between; margin-top:8px; margin-bottom:14px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:10px 16px;">
         <div style="display:flex; align-items:center; gap:10px;">
             <span class="badge badge-normal" style="font-weight:700; background:#EEF2FF; color:#4F46E5; border:1px solid #C7D2FE; padding:3px 10px; border-radius:6px; font-size:0.85rem;">탐색 완료 (100%)</span>
-            <span style="font-size:0.9rem; color:#1E293B; font-weight:600;">마스터 아카이브(42,975건) 및 실시간 포털 탐색 완료{desc_txt}</span>
+            <span style="font-size:0.9rem; color:#1E293B; font-weight:600;">마스터 아카이브(67,000+건) 및 실시간 포털 탐색 완료{desc_txt}</span>
         </div>
         <div style="font-size:0.85rem; color:#64748B;">
             총 <b>{total_records}</b>건 발령 기록 확인{rep_txt} · 전체 아카이브 (2000년 ~ 2026년)
@@ -638,8 +644,8 @@ with st.sidebar:
             st.session_state["upload_banner"] = res["message"]
             st.rerun()
 
-    if st.button("아카이브 데이터 동기화", use_container_width=True, help="번들링된 2000~2026 전체 42,975건 아카이브 데이터를 로컬 DB에 병합 및 복원합니다."):
-        with st.spinner("아카이브 시드 데이터(42,975건) 동기화 중..."):
+    if st.button("아카이브 데이터 동기화", use_container_width=True, help="번들링된 2000~2026 전체 67,000+건 아카이브 데이터를 로컬 DB에 병합 및 복원합니다."):
+        with st.spinner("아카이브 시드 데이터(67,000+건) 동기화 중..."):
             res_sync = db.ensure_seed_data(force=True)
             cnt = res_sync.get("inserted_records", 0)
             st.session_state["upload_banner"] = f"아카이브 데이터 동기화 완료: {cnt:,}건 추가 반영 (전체 {db.get_stats()['records']:,}건)"

@@ -4488,6 +4488,11 @@ class MediaDatabase:
                 cnt = row[0] if row else 0
                 max_date = str(row[1]) if (row and row[1]) else ""
 
+                # 초고속 CPU 절약 검증: 이미 DB에 60,000건 이상의 전체 아카이브가 구축되어 있는 경우
+                # 대용량 gzip 압축 해제 및 json.load를 전면 건너뛰어 CPU 사용량을 0%로 유지합니다.
+                if not force and cnt >= 60000 and max_date >= "2026-01-01":
+                    return {"inserted_records": 0, "status": "already_up_to_date", "total_records": cnt}
+
                 with gzip.open(resolved_path, "rt", encoding="utf-8") as f:
                     seed_payload = json.load(f)
 
