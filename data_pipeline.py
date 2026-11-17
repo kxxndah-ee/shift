@@ -4942,8 +4942,26 @@ class MediaDatabase:
 
             clean_d = dept.strip() if dept else ""
             clean_r = rank.strip() if rank else ""
-            is_const_re = ("건설" in clean_d and "부동산" in clean_d)
+            is_const_re = ("건설" in clean_d or "부동산" in clean_d)
+            stem_d = re.sub(r"(?:부|팀|국|실|본부|센터|단|소)$", "", clean_d).strip() if clean_d else ""
+            has_stem = (len(stem_d) >= 2 and stem_d != clean_d)
             is_rep_search = (clean_r == "기자")
+
+            if is_const_re:
+                d_pr_sql = "(pr.dept LIKE ? OR pr.dept LIKE ? OR pr.dept LIKE ?)"
+                d_pr_p = ["%건설부동산%", "%건설%", "%부동산%"]
+                d_cur_sql = "(r.current_dept LIKE ? OR r.current_dept LIKE ? OR r.current_dept LIKE ?)"
+                d_cur_p = ["%건설부동산%", "%건설%", "%부동산%"]
+            elif has_stem:
+                d_pr_sql = "(pr.dept LIKE ? OR pr.dept LIKE ?)"
+                d_pr_p = [f"%{clean_d}%", f"%{stem_d}%"]
+                d_cur_sql = "(r.current_dept LIKE ? OR r.current_dept LIKE ?)"
+                d_cur_p = [f"%{clean_d}%", f"%{stem_d}%"]
+            else:
+                d_pr_sql = "pr.dept LIKE ?"
+                d_pr_p = [f"%{dept}%"]
+                d_cur_sql = "r.current_dept LIKE ?"
+                d_cur_p = [f"%{dept}%"]
 
             rep_rank_pr_sql = """(
                 pr.rank_title LIKE '%기자%' 
@@ -5002,11 +5020,6 @@ class MediaDatabase:
             )"""
 
             if dept and rank:
-                d_pr_sql = "(pr.dept LIKE ? OR pr.dept LIKE ? OR pr.dept LIKE ?)" if is_const_re else "pr.dept LIKE ?"
-                d_pr_p = ["%건설부동산%", "%건설%", "%부동산%"] if is_const_re else [f"%{dept}%"]
-                d_cur_sql = "(r.current_dept LIKE ? OR r.current_dept LIKE ? OR r.current_dept LIKE ?)" if is_const_re else "r.current_dept LIKE ?"
-                d_cur_p = ["%건설부동산%", "%건설%", "%부동산%"] if is_const_re else [f"%{dept}%"]
-
                 if is_rep_search:
                     query += f""" AND (
                         EXISTS (
@@ -5058,11 +5071,6 @@ class MediaDatabase:
                     params.extend(d_cur_p)
                     params.append(f"%{rank}%")
             elif dept:
-                d_pr_sql = "(pr.dept LIKE ? OR pr.dept LIKE ? OR pr.dept LIKE ?)" if is_const_re else "pr.dept LIKE ?"
-                d_pr_p = ["%건설부동산%", "%건설%", "%부동산%"] if is_const_re else [f"%{dept}%"]
-                d_cur_sql = "(r.current_dept LIKE ? OR r.current_dept LIKE ? OR r.current_dept LIKE ?)" if is_const_re else "r.current_dept LIKE ?"
-                d_cur_p = ["%건설부동산%", "%건설%", "%부동산%"] if is_const_re else [f"%{dept}%"]
-
                 query += f""" AND (
                     EXISTS (
                         SELECT 1 FROM personnel_records pr 
@@ -5193,12 +5201,17 @@ class MediaDatabase:
                 params.extend(m_params)
             if dept:
                 clean_d = dept.strip()
-                if "건설" in clean_d and "부동산" in clean_d:
+                if "건설" in clean_d or "부동산" in clean_d:
                     query += " AND (dept LIKE ? OR dept LIKE ? OR dept LIKE ?)"
                     params.extend(["%건설부동산%", "%건설%", "%부동산%"])
                 else:
-                    query += " AND dept LIKE ?"
-                    params.append(f"%{dept}%")
+                    stem_d = re.sub(r"(?:부|팀|국|실|본부|센터|단|소)$", "", clean_d).strip()
+                    if len(stem_d) >= 2 and stem_d != clean_d:
+                        query += " AND (dept LIKE ? OR dept LIKE ?)"
+                        params.extend([f"%{clean_d}%", f"%{stem_d}%"])
+                    else:
+                        query += " AND dept LIKE ?"
+                        params.append(f"%{clean_d}%")
             if rank:
                 clean_r = rank.strip()
                 if clean_r == "기자":
