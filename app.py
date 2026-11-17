@@ -531,48 +531,12 @@ def render_html(html_content: str):
 DB_FILE = "media_tracker.db"
 db = MediaDatabase(DB_FILE)
 
-# 일일 자동 증분 동기화 (당일 최초 접속 시 백그라운드 스레드 비동기 실행)
-def check_and_run_daily_auto_sync():
-    try:
-        sync_meta_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "last_sync.json")
-        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
-        already_synced = False
-        if os.path.exists(sync_meta_path):
-            try:
-                with open(sync_meta_path, "r", encoding="utf-8") as f:
-                    sync_meta = json.load(f)
-                    if sync_meta.get("last_sync_date") == today_str:
-                        already_synced = True
-            except Exception:
-                pass
+# Streamlit Community Cloud CPU 자원 최적화 캐싱 (10분 캐시 유지)
+@st.cache_data(ttl=600)
+def get_cached_stats():
+    return db.get_stats()
 
-        if not already_synced:
-            def _async_bg_sync():
-                try:
-                    res = OnlineNewsTracker.fetch_latest_online_personnel(max_articles=10)
-                    os.makedirs(os.path.dirname(sync_meta_path), exist_ok=True)
-                    with open(sync_meta_path, "w", encoding="utf-8") as f:
-                        json.dump({
-                            "last_sync_date": today_str,
-                            "updated_at": datetime.datetime.now().isoformat(),
-                            "result": res.get("message", "")
-                        }, f, ensure_ascii=False, indent=2)
-                except Exception:
-                    pass
-
-            t = threading.Thread(target=_async_bg_sync, daemon=True)
-            t.start()
-    except Exception:
-        pass
-
-try:
-    if "daily_sync_checked" not in st.session_state:
-        st.session_state["daily_sync_checked"] = True
-        check_and_run_daily_auto_sync()
-except Exception:
-    pass
-
-stats = db.get_stats()
+stats = get_cached_stats()
 
 
 def display_search_progress(target_desc: str, placeholder: Any, total_found: int = 0):
@@ -697,11 +661,6 @@ with tab_search:
         key="search_mode_radio"
     )
     st.session_state["search_mode_selection"] = search_mode
-
-    all_reporters = [
-        r for r in db.get_all_reporters() 
-        if not is_media_organization(r["name"]) and not is_excluded_department(r.get("current_dept", ""))
-    ]
 
     # 1. 이름 검색 (폰트 및 사이즈는 매체·부서 검색과 동일)
     if search_mode == "이름 검색":
@@ -934,7 +893,7 @@ with tab_search:
 
     if search_mode == "이름 검색":
         active_name = st.session_state.get("active_search_name", "")
-        filtered_reporters = all_reporters
+        filtered_reporters = []
         if active_name:
             # 복합 검색어 감지 (예: '한국경제 건설부동산 부장', '헤럴드경제 김동호')
             parsed = parse_composite_search_query(active_name)
@@ -976,11 +935,16 @@ with tab_search:
                             ]
                             alt_search_note = f"'{composite_title}' 조건에 부합하는 '{p_r}' 직급 발령 기록은 확인되지 않았으나, 동일 부서의 타 직급 발령({len(alt_records)}건)이 확인되어 안내합니다."
             else:
+                filtered_reporters = [
+                    r for r in db.search_reporters(name=active_name)
+                    if not is_media_organization(r["name"]) and not is_excluded_department(r.get("current_dept", ""))
+                ]
                 matched_records = [
                     r for r in db.search_records(name=active_name)
                     if is_media_organization(r.get("media", "")) and (not r.get("article_title") or is_personnel_article_title(r.get("article_title", "")))
                 ]
         else:
+            filtered_reporters = []
             matched_records = []
     elif search_mode == "매체·부서 검색":
         active_name = ""
@@ -1023,7 +987,7 @@ with tab_search:
                         ]
                         alt_search_note = f"'{m_val}'에 '{r_val}' 직급 발령 기록은 확인되지 않았으나, 해당 언론사의 발령 기록({len(alt_records)}건)이 확인되어 안내합니다."
         else:
-            filtered_reporters = all_reporters
+            filtered_reporters = []
             matched_records = []
     elif search_mode == "매체·이름 검색":
         m_val = st.session_state.get("filter_mn_media_val", "")
@@ -1039,7 +1003,7 @@ with tab_search:
                 if is_media_organization(r.get("media", "")) and (not r.get("article_title") or is_personnel_article_title(r.get("article_title", ""))) and not is_excluded_department(r.get("dept", ""))
             ]
         else:
-            filtered_reporters = all_reporters
+            filtered_reporters = []
             matched_records = []
 
     def format_dept_journey_str(timeline_list: List[Dict[str, Any]]) -> str:
@@ -1354,7 +1318,7 @@ with tab_search:
         if search_mode == "매체·이름 검색" and st.session_state.get("filter_mn_media_val", ""):
             matched_reporters = [r for r in filtered_reporters if active_name in r["name"]]
         else:
-            matched_reporters = [r for r in filtered_reporters if active_name in r["name"]] if filtered_reporters else [r for r in all_reporters if active_name in r["name"]]
+            matched_reporters = [r for r in filtered_reporters if active_name in r["name"]] if filtered_reporters else [r for r in db.search_reporters(name=active_name) if active_name in r["name"] and not is_media_organization(r["name"]) and not is_excluded_department(r.get("current_dept", ""))]
         
         if matched_reporters:
             render_search_completion_indicator(total_records=len(matched_records), total_reporters=len(matched_reporters), query_desc=active_name)
@@ -1983,16 +1947,21 @@ with tab_monitoring:
                     client_secret=nsec
                 )
                 st.session_state["upload_banner"] = res.get("message", "공식 [인사]/<인사> 기사 실시간 수집 및 정리가 완료되었습니다.")
+                st.cache_data.clear()
                 st.rerun()
 
     # 데이터 로드: 선택된 일자 우선 조회, 없으면 최근 전체 조회
+    @st.cache_data(ttl=300)
+    def get_cached_daily_summary(dt_str: str):
+        return db.get_daily_personnel_summary(dt_str)
+
     date_str = str(selected_date)
-    summary_data = db.get_daily_personnel_summary(date_str)
+    summary_data = get_cached_daily_summary(date_str)
     is_showing_fallback = False
 
     if summary_data["total_records"] == 0:
         # 당일 데이터가 아직 수집되지 않은 경우 최근 발령 데이터로 대체 표시
-        summary_data = db.get_daily_personnel_summary("")
+        summary_data = get_cached_daily_summary("")
         is_showing_fallback = True
 
     # [인사] 또는 <인사> 기사 중 언론사 인사소식만 엄격 필터링
