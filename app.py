@@ -558,12 +558,12 @@ def display_search_progress(
     count_calc_fn: Optional[Callable[[], int]] = None
 ) -> int:
     """
-    검색 버튼 클릭 시 실시간 온라인 포털 탐색과 마스터 아카이브 DB 색인을 기본 통합 수행하며,
-    검색 진행률(검색률: 10% -> 35% -> 70% -> 90% -> 100%)을 시각적으로 안내합니다.
+    검색 버튼 클릭 시 진행률(10% -> 35% -> 70% -> 90% -> 100%)을
+    사용자가 요청한 간결한 형태('탐색 중 (35%)')로 표시합니다.
     """
-    p_bar = placeholder.progress(10, text="검색 시작 : 검색어 정규화 및 토큰 분석 중 (검색률: 10%)")
-    time.sleep(0.02)
-    p_bar.progress(35, text="포털 실시간 최신 인사 기사 동기화 및 마스터 DB 색인 탐색 중 (검색률: 35%)")
+    p_bar = placeholder.progress(10, text="탐색 중 (10%)")
+    time.sleep(0.04)
+    p_bar.progress(35, text="탐색 중 (35%)")
     
     if online_sync_fn:
         try:
@@ -577,28 +577,28 @@ def display_search_progress(
         except Exception:
             pass
 
-    p_bar.progress(70, text="언론사 계열/별칭 그룹 매칭 및 이직·승진 타임라인 교차 검증 중 (검색률: 70%)")
-    time.sleep(0.02)
-    p_bar.progress(90, text="검색 결과 정밀 필터링 및 랭킹 정렬 중 (검색률: 90%)")
-    time.sleep(0.02)
+    p_bar.progress(70, text="탐색 중 (70%)")
+    time.sleep(0.04)
+    p_bar.progress(90, text="탐색 중 (90%)")
+    time.sleep(0.04)
     
-    result_text = f"검색 완료 (검색률: 100%) : '{target_desc}' 발령 기록 {total_found}건 확인" if target_desc else f"검색 완료 (검색률: 100%) : 총 {total_found}건 확인"
+    result_text = f"탐색 완료 (100%) : '{target_desc}' 발령 기록 {total_found}건 확인" if target_desc else f"탐색 완료 (100%) : 총 {total_found}건 확인"
     p_bar.progress(100, text=result_text)
-    time.sleep(0.08)
+    time.sleep(0.12)
     placeholder.empty()
     return total_found
 
 
 def render_search_completion_indicator(total_records: int, total_reporters: int = 0, query_desc: str = ""):
     """
-    검색 완료 후 상단에 검색률 100% 달성 및 아카이브 탐색 완료 상태를 상시 표시합니다.
+    검색 완료 후 상단에 탐색 완료 (100%) 상태를 상시 표시합니다.
     """
     rep_txt = f" · 언론인 <b>{total_reporters}</b>명" if total_reporters > 0 else ""
     desc_txt = f" · '{query_desc}'" if query_desc else ""
     render_html(f"""
     <div style="display:flex; align-items:center; justify-content:space-between; margin-top:8px; margin-bottom:14px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:10px 16px;">
         <div style="display:flex; align-items:center; gap:10px;">
-            <span class="badge badge-normal" style="font-weight:700; background:#EEF2FF; color:#4F46E5; border:1px solid #C7D2FE; padding:3px 10px; border-radius:6px; font-size:0.85rem;">검색률: 100%</span>
+            <span class="badge badge-normal" style="font-weight:700; background:#EEF2FF; color:#4F46E5; border:1px solid #C7D2FE; padding:3px 10px; border-radius:6px; font-size:0.85rem;">탐색 완료 (100%)</span>
             <span style="font-size:0.9rem; color:#1E293B; font-weight:600;">마스터 아카이브(42,975건) 및 실시간 포털 탐색 완료{desc_txt}</span>
         </div>
         <div style="font-size:0.85rem; color:#64748B;">
