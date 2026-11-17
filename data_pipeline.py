@@ -211,6 +211,7 @@ MEDIA_GROUP_ALIASES: Dict[str, List[str]] = {
     "머니투데이": ["머니투데이신문", "머니투데이그룹", "머니투데이미디어", "머투"],
     "머니투데이방송": ["MTN", "머니투데이방송", "mtn"],
     "이데일리": ["이데일리신문", "이데일리M", "이데일리m", "KG그룹"],
+    "이투데이": ["이투데이신문", "이투데이사", "이투데이그룹", "이투데이미디어", "이투데이뉴스", "(주)이투데이", "etoday", "etoday.co.kr"],
     "전자신문": ["전자신문사", "etnews"],
     "디지털타임스": ["디지털타임스사", "DT", "디타"],
     "아주경제": ["아주경제신문", "아주경제신문사", "아주일보"],
@@ -812,7 +813,7 @@ class PersonnelRegexParser:
 
     # 미디어 헤더 패턴 (한 기사 내 여러 언론사 구분용)
     MEDIA_HEADER_PATTERN = re.compile(
-        r"(?:◆|◇|■|□|◎|●|【|\[|<)\s*([가-힣0-9A-Za-z]*(?:일보|경제|뉴스|신문|타임스|타임즈|미디어|데일리|헤럴드|통신|방송|TV|mbc|kbs|sbs|ytn|jtbc|뉴스1|뉴시스|연합뉴스|한겨레|투데이|토마토|블로터|더벨|파이낸셜|팍스넷|지디넷|비즈워치|비즈니스워치|이투데이|뉴스핌))(?:\([^\)]*\))?\s*(?:】|\]|>|◆|◇|■|□|◎|●)?"
+        r"(?:◆|◇|■|□|◎|●|⊙|◈|▣|○|【|\[|<)\s*([가-힣0-9A-Za-z]*(?:일보|경제|뉴스|신문|타임스|타임즈|미디어|데일리|헤럴드|통신|방송|TV|mbc|kbs|sbs|ytn|jtbc|뉴스1|뉴시스|연합뉴스|한겨레|투데이|토마토|블로터|더벨|파이낸셜|팍스넷|지디넷|비즈워치|비즈니스워치|이투데이|뉴스핌))(?:\([^\)]*\))?\s*(?:】|\]|>|◆|◇|■|□|◎|●|⊙|◈|▣|○)?"
     )
 
     ACTION_CANDIDATES: List[str] = [
@@ -916,7 +917,7 @@ class PersonnelRegexParser:
         raw_lines = [html.unescape(line).strip() for line in article_text.splitlines() if line.strip()]
         lines: List[str] = []
         for rl in raw_lines:
-            sub_parts = re.split(r"(?<=[^\s])\s*(?=[◇◆■□【])", rl)
+            sub_parts = re.split(r"(?<=[^\s])\s*(?=[◇◆■□【⊙◈▣◎○●])", rl)
             for sp in sub_parts:
                 sp = sp.strip()
                 if sp:
@@ -965,11 +966,11 @@ class PersonnelRegexParser:
                     current_rank = ""
                     current_bureau = ""
             else:
-                clean_sec_hdr = re.sub(r"^[◇◆■□▲△▼▽▷▶<\[\(【Δδ\s]+|[>\]\)】\s]+$", "", line).strip()
+                clean_sec_hdr = re.sub(r"^[◇◆■□▲△▼▽▷▶<\[\(【Δδ⊙◈▣◎○●\s]+|[>\]\)】\s]+$", "", line).strip()
                 clean_sec_hdr = re.sub(r"\([^\)]*\)", "", clean_sec_hdr).strip()
                 clean_sec_hdr = re.split(r"[\]\)>】〉»<\[\(【〈«]", clean_sec_hdr)[0].strip()
                 is_action_or_rank = any(act in clean_sec_hdr for act in cls.ACTION_CANDIDATES) or any(rnk in clean_sec_hdr for rnk in ["부장", "차장", "국장", "부국장", "본부장", "팀장", "실장", "직대", "대우", "기자", "논설", "주필", "위원", "단장", "디렉터", "총괄"])
-                if not is_action_or_rank and len(clean_sec_hdr) <= 15 and not any(cls.clean_name(t) for t in line.split()):
+                if not is_action_or_rank and len(clean_sec_hdr) <= 25 and not any(cls.clean_name(t) for t in line.split()):
                     if is_department_header(clean_sec_hdr):
                         current_bureau = clean_sec_hdr
                         current_dept = clean_sec_hdr
@@ -978,7 +979,7 @@ class PersonnelRegexParser:
                         current_dept = ""
                         current_rank = ""
                         current_bureau = ""
-                    elif any(nmk in clean_sec_hdr for nmk in NON_MEDIA_KEYWORDS) or clean_sec_hdr.endswith(("처", "청", "원", "회", "공사", "공단", "재단", "시", "대학교", "대학", "병원", "학원")):
+                    elif any(nmk in clean_sec_hdr for nmk in NON_MEDIA_KEYWORDS) or clean_sec_hdr.endswith(("처", "청", "원", "회", "공사", "공단", "재단", "시", "대학교", "대학", "병원", "학원", "그룹", "은행", "증권", "생명", "화재", "카드", "캐피탈", "저축은행", "건설", "전자", "통신", "제철", "중공업", "화학", "에너지", "지주", "금융", "협회", "연합회")):
                         current_media = clean_sec_hdr
                         current_dept = ""
                         current_rank = ""
@@ -2471,7 +2472,7 @@ class OnlineNewsTracker:
                     if not any(tok in clean_title for tok in km_tokens):
                         if pr and is_same_media_company(pr, matched_km):
                             pass
-                        elif any(tok in u for tok in [matched_km, "article/421", "article/001", "article/025", "article/003"]):
+                        elif any(tok in u for tok in [matched_km, "article/421", "article/001", "article/025", "article/003"]) or any(tok.lower() in u.lower() for tok in km_tokens):
                             pass
                         else:
                             return False
@@ -3219,14 +3220,14 @@ class OnlineNewsTracker:
                     f'{media_clean} "{dept_clean}" [인사]',
                     f'{media_clean} "{rank_clean}" [인사]',
                     f'[인사] {media_clean}',
-                    f'<{인사}> {media_clean}',
+                    f'<인사> {media_clean}',
                     f'{media_clean} [인사] 뉴스1',
                     f'{media_clean} [인사] 연합뉴스',
                 ])
                 for g_alias in alias_candidates:
                     q_list.extend([
                         f'[인사] {g_alias}',
-                        f'<{인사}> {g_alias}',
+                        f'<인사> {g_alias}',
                         f'{g_alias} [인사]',
                         f'{g_alias} {dept_clean}',
                         f'{g_alias} {dept_clean} {rank_clean}'
@@ -3241,14 +3242,14 @@ class OnlineNewsTracker:
                     f'{media_clean} {rank_clean} [인사]',
                     f'{media_clean} {rank_clean} 인사',
                     f'[인사] {media_clean}',
-                    f'<{인사}> {media_clean}',
+                    f'<인사> {media_clean}',
                     f'{media_clean} [인사] 뉴스1',
                     f'{media_clean} [인사] 연합뉴스',
                 ])
                 for g_alias in alias_candidates:
                     q_list.extend([
                         f'[인사] {g_alias}',
-                        f'<{인사}> {g_alias}',
+                        f'<인사> {g_alias}',
                         f'{g_alias} [인사]',
                         f'{g_alias} {rank_clean}'
                     ])
@@ -3257,14 +3258,14 @@ class OnlineNewsTracker:
                     f'{media_clean} {dept_clean} [인사]',
                     f'{media_clean} {dept_clean} 인사',
                     f'[인사] {media_clean}',
-                    f'<{인사}> {media_clean}',
+                    f'<인사> {media_clean}',
                     f'{media_clean} [인사] 뉴스1',
                     f'{media_clean} [인사] 연합뉴스',
                 ])
                 for g_alias in alias_candidates:
                     q_list.extend([
                         f'[인사] {g_alias}',
-                        f'<{인사}> {g_alias}',
+                        f'<인사> {g_alias}',
                         f'{g_alias} [인사]',
                         f'{g_alias} {dept_clean}'
                     ])
@@ -3277,7 +3278,7 @@ class OnlineNewsTracker:
                 q_list.extend([
                     f'{media_clean} 인사',
                     f'[인사] {media_clean}',
-                    f'<{인사}> {media_clean}',
+                    f'<인사> {media_clean}',
                     f'{media_clean} [인사]',
                     f'{media_clean} [인사] 연합뉴스',
                     f'{media_clean} [인사] 뉴스1',
@@ -3286,7 +3287,7 @@ class OnlineNewsTracker:
                     q_list.extend([
                         f'{g_alias} 인사',
                         f'[인사] {g_alias}',
-                        f'<{인사}> {g_alias}',
+                        f'<인사> {g_alias}',
                         f'{g_alias} [인사]'
                     ])
             elif rank_clean and dept_clean:
