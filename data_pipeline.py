@@ -206,7 +206,10 @@ MEDIA_GROUP_ALIASES: Dict[str, List[str]] = {
     "문화일보": ["문화일보사"],
     "서울경제": ["서울경제신문", "서울경제신문사", "서경", "서경마켓"],
     "아시아경제": ["아시아경제신문", "아시아경제신문사", "아경"],
-    "헤럴드경제": ["헤럴드경제신문", "헤경", "헤럴드", "(주)헤럴드", "주식회사 헤럴드", "헤럴드미디어", "코리아헤럴드", "헤럴드아트데이", "헤럴드에듀", "헤럴드디자인", "헤럴드팝", "heraldcorp", "heraldbiz", "heraldcorp.com"],
+    "헤럴드": ["헤럴드미디어", "(주)헤럴드", "주식회사 헤럴드", "헤럴드그룹", "헤럴드경제", "코리아헤럴드", "헤경", "헤럴드경제신문", "헤럴드아트데이", "헤럴드에듀", "헤럴드디자인", "헤럴드팝", "heraldcorp", "heraldbiz", "heraldcorp.com"],
+    "헤럴드미디어": ["헤럴드", "(주)헤럴드", "주식회사 헤럴드", "헤럴드그룹", "헤럴드경제", "코리아헤럴드", "헤경", "헤럴드경제신문", "heraldcorp", "heraldbiz", "heraldcorp.com"],
+    "헤럴드경제": ["헤럴드경제신문", "헤경"],
+    "코리아헤럴드": ["koreaherald", "코리아 헤럴드", "The Korea Herald"],
     "파이낸셜뉴스": ["파이낸셜", "fnnews", "파이낸셜뉴스신문사"],
     "머니투데이": ["머니투데이신문", "머니투데이그룹", "머니투데이미디어", "머투"],
     "머니투데이방송": ["MTN", "머니투데이방송", "mtn"],
@@ -294,7 +297,7 @@ def are_group_affiliates(media1: str, media2: str) -> bool:
         {"머니투데이", "머니투데이방송", "mtn", "머니s", "뉴스1", "뉴시스"},
         {"한국경제", "한경닷컴", "한경비즈니스", "한국경제tv", "한경매거진"},
         {"매일경제", "매경닷컴", "mbn", "매경이코노미"},
-        {"헤럴드경제", "코리아헤럴드", "헤럴드"},
+        {"헤럴드", "헤럴드미디어", "(주)헤럴드", "주식회사 헤럴드", "헤럴드그룹", "헤럴드경제", "코리아헤럴드", "헤럴드아트데이", "헤럴드에듀", "헤럴드팝", "헤럴드디자인"},
         {"조선일보", "조선비즈", "tv조선", "스포츠조선", "주간조선"},
         {"동아일보", "채널a", "스포츠동아", "주간동아"},
     ]
@@ -393,7 +396,10 @@ def normalize_media_name(raw_name: str) -> str:
     if "매일경제" in name or name in ["매경", "매경닷컴", "매경미디어", "매경미디어그룹"] or "매경미디어" in name: return "매일경제"
     if "서울경제" in name or name in ["서경", "서경마켓"]: return "서울경제"
     if "아시아경제" in name or name in ["아경"]: return "아시아경제"
-    if "헤럴드" in name or "herald" in n_compact: return "헤럴드경제"
+    if "코리아헤럴드" in name or "koreaherald" in n_compact: return "코리아헤럴드"
+    if "헤럴드경제" in name or name in ["헤경", "헤럴드경제신문"]: return "헤럴드경제"
+    if any(h in name for h in ["헤럴드미디어", "(주)헤럴드", "주식회사 헤럴드", "헤럴드그룹"]) or name in ["헤럴드", "헤럴드미디어"]: return "헤럴드"
+    if "헤럴드" in name or "herald" in n_compact: return "헤럴드"
     if "파이낸셜" in name: return "파이낸셜뉴스"
     if "머니투데이" in n_compact or "머투" in n_compact: return "머니투데이"
     if "이데일리m" in name.lower() or "이데일리 m" in name.lower(): return "이데일리M"
@@ -520,6 +526,10 @@ def is_same_media_company(m1: str, m2: str) -> bool:
     if (n1 == "중앙일보" and "jtbc" in n2.lower()) or (n2 == "중앙일보" and "jtbc" in n1.lower()):
         return False
 
+    # [헤럴드 == 헤럴드미디어 == (주)헤럴드 (동일 법인/회사)]
+    if {n1, n2}.issubset({"헤럴드", "헤럴드미디어", "(주)헤럴드", "주식회사 헤럴드", "헤럴드그룹"}):
+        return True
+
     # 2. 명시적 별칭 매핑(MEDIA_GROUP_ALIASES) 검사 (동일 그룹 내 별칭인지 여부)
     for base_name, aliases in MEDIA_GROUP_ALIASES.items():
         all_group = [base_name] + aliases
@@ -566,7 +576,7 @@ KNOWN_MEDIA_NAMES: set = {
     "ytn", "YTN", "kbs", "KBS", "mbc", "MBC", "sbs", "SBS", "jtbc", "JTBC", "mbn", "MBN",
     "tv조선", "TV조선", "채널a", "채널A", "연합뉴스TV", "연합뉴스tv",
     "한국경제TV", "한국경제tv", "한경TV", "한경tv", "매일경제TV", "매일경제tv", "매경TV", "매경tv",
-    "한경", "매경", "서경", "아경", "매일경제", "매일경제신문", "매일경제신문사", "매경미디어그룹", "매경미디어", "매경닷컴", "매경비즈", "한국경제", "한국경제신문", "한국경제신문사", "한경닷컴", "서울경제", "서울경제신문", "서울경제신문사", "아시아경제", "아시아경제신문", "헤럴드경제", "헤럴드경제신문",
+    "한경", "매경", "서경", "아경", "매일경제", "매일경제신문", "매일경제신문사", "매경미디어그룹", "매경미디어", "매경닷컴", "매경비즈", "한국경제", "한국경제신문", "한국경제신문사", "한경닷컴", "서울경제", "서울경제신문", "서울경제신문사", "아시아경제", "아시아경제신문", "헤럴드경제", "헤럴드경제신문", "헤럴드", "헤럴드미디어", "(주)헤럴드", "헤럴드그룹",
     "조선일보사", "동아일보사", "중앙일보사", "경향신문사", "한겨레신문", "한겨레신문사", "서울신문사", "세계일보사", "국민일보사", "문화일보사",
     "아시아투데이", "파이낸셜뉴스", "파이낸셜뉴스신문사", "이투데이", "뉴스토마토", "머니s", "머니S", "블로터", "더벨", "비즈한국",
     "비즈니스워치", "비즈워치", "글로벌이코노믹", "신아일보", "아주경제", "브릿지경제", "한국정경신문", "스마트에프엔",
@@ -670,7 +680,7 @@ def is_media_organization(name: str) -> bool:
     if n in [
         "2010년", "2011년", "제1", "미상", "온라인뉴스", "뉴스", "언론사", "기자", "본사", "지사", "편집국", "보도국",
         "미디어", "방송", "경제", "뉴미디어", "멀티미디어", "디지털", "온라인", "출판미디어", "미래미디어",
-        "방송뉴스", "미디어연구소", "미디어전략연구소", "미디어기술연구소", "출판", "잡지", "월간", "주간", "저널", "데일리", "헤럴드", "타임스", "프레스"
+        "방송뉴스", "미디어연구소", "미디어전략연구소", "미디어기술연구소", "출판", "잡지", "월간", "주간", "저널", "데일리", "타임스", "프레스"
     ]:
         return False
     if n in KNOWN_MEDIA_NAMES or any(km.lower() == n for km in KNOWN_MEDIA_NAMES):
@@ -1459,6 +1469,12 @@ class PersonnelTrackerEngine:
                 r_copy["media"] = "이코노미스트"
             elif med_norm == "일간스포츠" or "일간스포츠" in med or "일간스포츠" in art_t:
                 r_copy["media"] = "일간스포츠"
+            elif med_norm == "코리아헤럴드" or "코리아헤럴드" in med:
+                r_copy["media"] = "코리아헤럴드"
+            elif med_norm == "헤럴드경제" or "헤럴드경제" in med:
+                r_copy["media"] = "헤럴드경제"
+            elif med_norm in ["헤럴드", "헤럴드미디어"] or med in ["헤럴드", "헤럴드미디어", "(주)헤럴드"]:
+                r_copy["media"] = "헤럴드"
             else:
                 r_copy["media"] = med_norm
 
@@ -4568,6 +4584,21 @@ class MediaDatabase:
         if m_norm == "조선일보":
             sql = f"(({col_name} LIKE ? OR {col_name} LIKE ?) AND {col_name} NOT LIKE '%TV%' AND {col_name} NOT LIKE '%tv%')"
             return sql, [f"%{m_raw}%", f"%{m_norm}%"]
+
+        # 7. 헤럴드 / 헤럴드미디어 (모회사/그룹) 검색 시: 산하 헤럴드경제, 코리아헤럴드 및 법인 전수 매칭
+        if m_norm in ["헤럴드", "헤럴드미디어"] or m_raw in ["헤럴드", "헤럴드미디어", "(주)헤럴드", "헤럴드그룹"]:
+            sql = f"({col_name} LIKE '%헤럴드%' OR {col_name} LIKE '%코리아헤럴드%')"
+            return sql, []
+
+        # 8. 헤럴드경제 검색 시: 헤럴드경제 본지 및 본사/헤럴드미디어 공통 발령 포함 (코리아헤럴드 단독 배제)
+        if m_norm == "헤럴드경제":
+            sql = f"({col_name} LIKE '%헤럴드경제%' OR {col_name} IN ('헤럴드', '헤럴드미디어'))"
+            return sql, []
+
+        # 9. 코리아헤럴드 검색 시: 코리아헤럴드 영자지 및 본사/헤럴드미디어 공통 발령 포함 (헤럴드경제 단독 배제)
+        if m_norm == "코리아헤럴드":
+            sql = f"({col_name} LIKE '%코리아헤럴드%' OR ({col_name} IN ('헤럴드', '헤럴드미디어') AND {col_name} NOT LIKE '%경제%'))"
+            return sql, []
 
         # 기본: 일반 매체 및 계열/별칭 포괄 매칭
         aliases = MEDIA_GROUP_ALIASES.get(m_norm, [])
