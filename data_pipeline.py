@@ -4628,6 +4628,17 @@ class MediaDatabase:
                 if any(is_same_media_company(parts[0], km) for km in KNOWN_MEDIA_NAMES) or parts[0] in KNOWN_MEDIA_NAMES:
                     media, dept = parts[0], parts[1]
 
+        # 단독 부서명이 media에 입력된 경우(예: media="건설부동산") 자동으로 dept로 전환
+        if media and not dept:
+            m_chk = media.strip()
+            if not is_media_organization(m_chk) and (
+                is_department_header(m_chk) 
+                or any(m_chk.endswith(sfx) for sfx in ["부", "팀", "국", "실", "센터", "단", "소", "본부"])
+                or any(kw in m_chk for kw in ["건설", "부동산", "산업", "경제", "정치", "사회", "금융", "증권", "문화", "국제", "it", "과학", "바이오", "유통", "기획", "논설"])
+            ):
+                dept = m_chk
+                media = ""
+
         # dept 내에 직급명(부장, 차장 등)이 포함된 경우 rank로 자동 분리
         if dept and not rank:
             for rnk_term in ["부장", "차장", "팀장", "국장", "부국장", "실장", "본부장", "에디터", "데스크", "기자"]:
@@ -4864,6 +4875,17 @@ class MediaDatabase:
                 parts = media.split(None, 1)
                 if any(is_same_media_company(parts[0], km) for km in KNOWN_MEDIA_NAMES) or parts[0] in KNOWN_MEDIA_NAMES:
                     media, dept = parts[0], parts[1]
+
+        # 단독 부서명이 media에 입력된 경우(예: media="건설부동산") 자동으로 dept로 전환
+        if media and not dept:
+            m_chk = media.strip()
+            if not is_media_organization(m_chk) and (
+                is_department_header(m_chk) 
+                or any(m_chk.endswith(sfx) for sfx in ["부", "팀", "국", "실", "센터", "단", "소", "본부"])
+                or any(kw in m_chk for kw in ["건설", "부동산", "산업", "경제", "정치", "사회", "금융", "증권", "문화", "국제", "it", "과학", "바이오", "유통", "기획", "논설"])
+            ):
+                dept = m_chk
+                media = ""
 
         # dept 내에 직급명(부장, 차장 등)이 포함된 경우 rank로 자동 분리
         if dept and not rank:
