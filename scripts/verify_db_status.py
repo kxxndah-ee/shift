@@ -45,3 +45,31 @@ for outlet in major_outlets:
     min_yr = years[0] if years else "None"
     max_yr = years[-1] if years else "None"
     print(f"{outlet:10s} | {cnt_total:5d}건 | {min_yr} ~ {max_yr} ({len(years):2d}개년)")
+
+non_major_outlets = [
+    "부산일보", "국제신문", "매일신문", "영남일보", "대구일보", "경북일보",
+    "강원일보", "강원도민일보", "대전일보", "중도일보", "충청투데이", "충청일보",
+    "광주일보", "전남일보", "전북도민일보", "전북일보", "경남신문", "경기일보",
+    "경인일보", "중부일보", "인천일보", "기호일보", "경상일보",
+    "KNN", "TBC", "kbc광주방송", "JTV전주방송", "CJB청주방송", "G1방송", "OBS경인TV",
+    "아주경제", "아시아투데이", "이투데이", "뉴스토마토", "비즈워치", "더벨", "딜사이트",
+    "데일리안", "프레시안", "오마이뉴스", "기자협회보", "시사저널", "농민신문", "신아일보",
+    "브릿지경제", "EBN", "뉴스핌", "뉴스웨이", "스포츠조선", "스포츠서울", "일간스포츠",
+    "CBS기독교방송", "BBS불교방송", "CPBC가톨릭평화방송"
+]
+
+print("\n=== 기사에서 언급되는 지역/전문/인터넷 언론사 아카이브 현황 ===")
+for outlet in non_major_outlets:
+    c.execute("""
+        SELECT SUBSTR(pub_date, 1, 4) as yr, COUNT(*)
+        FROM personnel_records
+        WHERE media LIKE ?
+        GROUP BY yr
+        ORDER BY yr
+    """, (f"%{outlet}%",))
+    rows = c.fetchall()
+    cnt_total = sum(r[1] for r in rows)
+    years = [r[0] for r in rows]
+    min_yr = years[0] if years else "None"
+    max_yr = years[-1] if years else "None"
+    print(f"{outlet:12s} | {cnt_total:5d}건 | {min_yr} ~ {max_yr} ({len(years):2d}개년)")
