@@ -201,62 +201,78 @@ def collect_joongang_articles(max_pages: int = 60, existing_urls: Set[str] = Non
 # =========================================================================
 TARGET_OUTLETS = [
     # 주요 전국 일간지
-    "조선일보", "동아일보", "경향신문", "한겨레", "서울신문", "한국일보", "세계일보", "국민일보", "문화일보",
-    # 주요 경제지
-    "한국경제", "한국경제신문", "매일경제", "매일경제신문", "서울경제", "서울경제신문", "아시아경제", "헤럴드경제", "파이낸셜뉴스", "아주경제", "이데일리", "머니투데이", "전자신문", "디지털타임스",
+    "조선일보", "동아일보", "중앙일보", "경향신문", "한겨레", "서울신문", "한국일보", "세계일보", "국민일보", "문화일보",
+    # 주요 경제지 및 전문지
+    "한국경제", "한국경제신문", "매일경제", "매일경제신문", "서울경제", "서울경제신문", "아시아경제", "헤럴드경제", "헤럴드", "코리아헤럴드", "파이낸셜뉴스", "아주경제", "이데일리", "머니투데이", "전자신문", "디지털타임스", "딜사이트",
+    # 통신사
+    "연합뉴스", "뉴스1", "뉴시스",
     # 지상파 및 보도/종편 방송사
     "KBS", "MBC", "SBS", "YTN", "연합뉴스TV", "JTBC", "MBN", "채널A", "TV조선", "OBS", "CBS", "BBS",
     # 유력 지역 일간지
-    "부산일보", "국제신문", "매일신문", "영남일보", "강원일보", "강원도민일보", "대전일보", "충청투데이", "광주일보", "전남일보", "전북도민일보", "제주일보",
+    "부산일보", "국제신문", "매일신문", "영남일보", "강원일보", "강원도민일보", "대전일보", "충청투데이", "광주일보", "전남일보", "전북도민일보", "제주일보", "경기일보", "경인일보",
     # 종합 인사 묶음
     "신문", "일보", "방송"
 ]
 
+def scan_naver_outlet_year(outlet: str, yr: int, seen: Set[str]) -> List[Dict[str, Any]]:
+    items = []
+    queries = [f'"{outlet}" "[인사]"', f'[인사] {outlet}']
+    if not outlet.endswith(("신문", "방송", "뉴스", "통신", "일보", "타임스", "타임즈")):
+        queries.append(f'"{outlet}신문" [인사]')
+
+    ds = f"{yr}.01.01"
+    de = f"{yr}.12.31"
+    p_from_to = f"p:from{yr}0101to{yr}1231"
+
+    for q in queries:
+        for start_idx in [1, 11]:
+            start_param = f"&start={start_idx}" if start_idx > 1 else ""
+            url = f"https://search.naver.com/search.naver?where=news&query={quote(q)}&sort=0&ds={ds}&de={de}&nso=so:r,{p_from_to},a:all{start_param}"
+            try:
+                resp = session.get(url, timeout=4.0, verify=False)
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.content, "html.parser")
+                    tit_elems = soup.select(".news_tit, a.W5fYO2_0xMDeLrlx, a[href*='articleView'], a[href*='article']")
+                    for a in tit_elems:
+                        h = a.get("href", "")
+                        t = a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
+                        if not h or not t or h in seen:
+                            continue
+                        if not any(k in t for k in ["[인사]", "<인사>", "【인사】", "인사"]):
+                            continue
+                        seen.add(h)
+                        items.append({
+                            "url": h,
+                            "title": t,
+                            "source": outlet,
+                            "date": f"{yr}-12-31"
+                        })
+            except Exception:
+                pass
+    return items
+
+
 def scan_naver_historical_appointments(existing_urls: Set[str] = None) -> List[Dict[str, Any]]:
-    print("\n[3/4] 2006~2026 (과거 20년) 네이버 뉴스 전 언론사 정기인사 스캔 시작...")
+    print("\n[3/4] 2005~2026 (과거 22년 전수) 네이버 뉴스 전 언론사 정기인사 병렬 스캔 시작...")
     articles = []
     seen = set(existing_urls or [])
+    years = list(range(2005, 2027))
 
-    years = list(range(2006, 2027))
-
+    tasks = []
     for yr in reversed(years):
-        year_articles = 0
+        for outlet in TARGET_OUTLETS:
+            tasks.append((outlet, yr))
 
-        # 연말/연초 정기인사 윈도우 (12월 15일 ~ 1월 31일) 및 경제지/주총 후 봄 정기인사 윈도우 (3월 1일 ~ 4월 15일)
-        windows = [
-            (f"{yr}.12.15", f"{yr+1}.01.31" if yr < 2026 else f"{yr}.12.31"),
-            (f"{yr}.03.01", f"{yr}.04.15")
-        ]
-
-        for ds_peak, de_peak in windows:
-            for outlet in TARGET_OUTLETS:
-                query = f'"{outlet}" "[인사]"'
-                url = f"https://search.naver.com/search.naver?where=news&query={quote(query)}&sort=0&ds={ds_peak}&de={de_peak}&nso=so:r,p:from{ds_peak.replace('.', '')}to{de_peak.replace('.', '')},a:all"
-                try:
-                    resp = session.get(url, timeout=3.5, verify=False)
-                    if resp.status_code == 200:
-                        soup = BeautifulSoup(resp.content, "html.parser")
-                        tit_elems = soup.select(".news_tit, a.W5fYO2_0xMDeLrlx, a[href*='articleView'], a[href*='article']")
-                        for a in tit_elems:
-                            h = a.get("href", "")
-                            t = a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
-                            if not h or not t or h in seen:
-                                continue
-                            if not any(k in t for k in ["[인사]", "<인사>", "인사"]):
-                                continue
-                            seen.add(h)
-                            articles.append({
-                                "url": h,
-                                "title": t,
-                                "source": outlet,
-                                "date": f"{yr}-12-31"
-                            })
-                            year_articles += 1
-                    time.sleep(0.05)
-                except Exception:
-                    pass
-
-        print(f"  >> {yr}년도 정기인사 스캔: {year_articles}건 신규 기사 발견 (누적 {len(articles)}건)")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+        futs = {executor.submit(scan_naver_outlet_year, out, yr, seen): (out, yr) for out, yr in tasks}
+        done_cnt = 0
+        for f in concurrent.futures.as_completed(futs):
+            done_cnt += 1
+            res = f.result()
+            if res:
+                articles.extend(res)
+            if done_cnt % 100 == 0 or done_cnt == len(tasks):
+                print(f"  네이버 스캔 진행: {done_cnt}/{len(tasks)} 작업 완료 (누적 {len(articles)}건 기사 확보)")
 
     print(f"  -> 네이버 뉴스 총 {len(articles)}건 발령 기사 확보")
     return articles
@@ -317,8 +333,8 @@ def run_20year_batch():
 
     all_candidates: List[Dict[str, Any]] = []
 
-    # 1. 한국기자협회보 (1~60페이지)
-    c1 = collect_journalist_articles(max_pages=60, existing_urls=existing_urls)
+    # 1. 한국기자협회보 20년치 전수 (1~475페이지)
+    c1 = collect_journalist_articles(max_pages=475, existing_urls=existing_urls)
     all_candidates.extend(c1)
 
     # 2. 중앙일보 피플 (1~60페이지)

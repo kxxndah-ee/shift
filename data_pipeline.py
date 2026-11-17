@@ -1836,10 +1836,14 @@ class OnlineNewsTracker:
             if m:
                 return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
 
-        # 6. 일반 URL 경로 내의 날짜 (/2024/05/23/ 등)
+        # 6. 일반 URL 경로 내의 날짜 (/2024/05/23/ 등) 및 쿼리스트링 파라미터(ud=20161230000052 등)
         url_m = re.search(r"/(19[6-9][0-9]|20[0-3][0-9])/?(\d{2})/?(\d{2})", url)
         if url_m:
             return f"{url_m.group(1)}-{url_m.group(2)}-{url_m.group(3)}"
+
+        url_param_m = re.search(r"[?&](?:ud|id|no|date)=(19[6-9][0-9]|20[0-3][0-9])(\d{2})(\d{2})", url)
+        if url_param_m:
+            return f"{url_param_m.group(1)}-{url_param_m.group(2)}-{url_param_m.group(3)}"
 
         return None
 
@@ -2359,8 +2363,9 @@ class OnlineNewsTracker:
                     if al != target_keyword and not any(al == w.replace('"', '').replace(' 인사', '') for w in wire_queries):
                         wire_queries.append(f'"{al}" 인사')
                         wire_queries.append(f'[인사] {al}')
-            elif not target_keyword.endswith(("신문", "방송", "뉴스", "통신", "일보", "경제")):
+            if target_keyword and not target_keyword.endswith(("신문", "방송", "뉴스", "통신", "일보", "타임스", "타임즈")):
                 wire_queries.append(f'"{target_keyword}신문" 인사')
+                wire_queries.append(f'[인사] {target_keyword}신문')
             # 통신사 및 주요 매체 연계 질의
             wire_queries.extend([
                 f"{target_keyword} [인사] 뉴스1",
@@ -2433,113 +2438,114 @@ class OnlineNewsTracker:
                 for start_idx in [1, 11]:
                     if len(articles) >= max_items:
                         break
-                try:
-                    n_sort = "1" if sort_first == "date" else "0"
-                    nso_sort = "so:dd" if n_sort == "1" else "so:r"
-                    start_param = f"&start={start_idx}" if start_idx > 1 else ""
+                    try:
+                        n_sort = "1" if sort_first == "date" else "0"
+                        nso_sort = "so:dd" if n_sort == "1" else "so:r"
+                        start_param = f"&start={start_idx}" if start_idx > 1 else ""
 
-                    # 1) PC 검색 (SDS 레이아웃 및 클래식 레이아웃 지원)
-                    pc_url = f"https://search.naver.com/search.naver?where=news&query={quote(wq)}&sort={n_sort}&ds={start_year}.01.01&de={end_year}.12.31&nso={nso_sort},p:from{start_year}0101to{end_year}1231,a:all{start_param}"
-                    resp_pc = cls.get_session().get(pc_url, headers=cls.HEADERS, timeout=4.0, verify=False)
-                    if resp_pc.status_code == 200:
-                        soup_pc = BeautifulSoup(resp_pc.content, "html.parser")
-                        tit_anchors = soup_pc.select("a.W5fYO2_0xMDeLrlx, a.news_tit")
-                        if not tit_anchors:
-                            for a in soup_pc.find_all("a"):
-                                h = a.get("href", "")
-                                t = a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
-                                if not h or not t or "keep.naver.com" in h or "/press/" in h:
+                        # 1) PC 검색 (SDS 레이아웃 및 클래식 레이아웃 지원)
+                        pc_url = f"https://search.naver.com/search.naver?where=news&query={quote(wq)}&sort={n_sort}&ds={start_year}.01.01&de={end_year}.12.31&nso={nso_sort},p:from{start_year}0101to{end_year}1231,a:all{start_param}"
+                        resp_pc = cls.get_session().get(pc_url, headers=cls.HEADERS, timeout=4.0, verify=False)
+                        if resp_pc.status_code == 200:
+                            soup_pc = BeautifulSoup(resp_pc.content, "html.parser")
+                            tit_anchors = soup_pc.select("a.W5fYO2_0xMDeLrlx, a.news_tit")
+                            if not tit_anchors:
+                                for a in soup_pc.find_all("a"):
+                                    h = a.get("href", "")
+                                    t = a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
+                                    if not h or not t or "keep.naver.com" in h or "/press/" in h:
+                                        continue
+                                    if is_personnel_article_title(t, url=h):
+                                        tit_anchors.append(a)
+
+                            for tit_a in tit_anchors:
+                                target_title = tit_a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
+                                origin_url = tit_a.get("href", "")
+                                if not target_title or not origin_url:
                                     continue
-                                if is_personnel_article_title(t, url=h):
-                                    tit_anchors.append(a)
 
-                        for tit_a in tit_anchors:
-                            target_title = tit_a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
-                            origin_url = tit_a.get("href", "")
-                            if not target_title or not origin_url:
-                                continue
-
-                            # 상위 카드 컨테이너 탐색
-                            p = tit_a.parent
-                            card = None
-                            for _ in range(6):
-                                if not p:
-                                    break
-                                if p.find("a", href=lambda h: h and ("/press/" in h or "media.naver.com" in h)) or p.find("a", class_=lambda c: c and "Zq2aiciJOBY5v64y" in c):
-                                    card = p
-                                    break
-                                p = p.parent
-
-                            press_name = ""
-                            naver_url = ""
-                            if card:
-                                press_a = card.find("a", href=lambda h: h and ("/press/" in h or "media.naver.com" in h)) or card.find("a", class_=lambda c: c and "Zq2aiciJOBY5v64y" in c)
-                                if press_a:
-                                    press_name = press_a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
-                                nav_a = card.find("a", href=lambda h: h and "news.naver.com" in h)
-                                if nav_a:
-                                    naver_url = nav_a.get("href", "")
-
-                            final_url = naver_url or origin_url
-                            if final_url and final_url not in seen_urls:
-                                p_guess = press_name
-                                if not p_guess:
-                                    if "article/421/" in final_url or "news1.kr" in final_url:
-                                        p_guess = "뉴스1"
-                                    elif "article/001/" in final_url or "yna.co.kr" in final_url:
-                                        p_guess = "연합뉴스"
-                                    elif "article/025/" in final_url or "joongang.co.kr" in final_url:
-                                        p_guess = "중앙일보"
-                                    elif "journalist.or.kr" in final_url:
-                                        p_guess = "한국기자협회"
-                                if is_valid_wire_article(target_title, final_url, p_guess):
-                                    seen_urls.add(final_url)
-                                    articles.append({
-                                        "title": target_title,
-                                        "url": final_url,
-                                        "media": p_guess,
-                                        "date_text": ""
-                                    })
-                                    if len(articles) >= max_items:
+                                # 상위 카드 컨테이너 탐색
+                                p = tit_a.parent
+                                card = None
+                                for _ in range(6):
+                                    if not p:
                                         break
+                                    if p.find("a", href=lambda h: h and ("/press/" in h or "media.naver.com" in h)) or p.find("a", class_=lambda c: c and "Zq2aiciJOBY5v64y" in c):
+                                        card = p
+                                        break
+                                    p = p.parent
 
-                    # 2) 모바일 검색 보조
-                    naver_url = f"https://m.search.naver.com/search.naver?where=m_news&query={quote(wq)}&sort={n_sort}&ds={start_year}.01.01&de={end_year}.12.31&nso={nso_sort},p:from{start_year}0101to{end_year}1231,a:all{start_param}"
-                    resp = cls.get_session().get(naver_url, headers=cls.HEADERS_MOBILE, timeout=3.5, verify=False)
-                    if resp.status_code == 200:
-                        soup = BeautifulSoup(resp.content, "html.parser")
-                        for a_elem in soup.find_all("a"):
-                            href = a_elem.get("href", "")
-                            title = html.unescape(a_elem.get_text(strip=True))
-                            if not href or href in seen_urls or len(title) < 3:
-                                continue
+                                press_name = ""
+                                naver_url = ""
+                                if card:
+                                    press_a = card.find("a", href=lambda h: h and ("/press/" in h or "media.naver.com" in h)) or card.find("a", class_=lambda c: c and "Zq2aiciJOBY5v64y" in c)
+                                    if press_a:
+                                        press_name = press_a.get_text(strip=True).replace("새 창 열림", "").replace("새창열림", "").strip()
+                                    nav_a = card.find("a", href=lambda h: h and "news.naver.com" in h)
+                                    if nav_a:
+                                        naver_url = nav_a.get("href", "")
 
-                            press_name = ""
-                            if "article/421/" in href or "news1.kr" in href or "뉴스1" in title:
-                                press_name = "뉴스1"
-                            elif "article/001/" in href or "yna.co.kr" in href or "연합뉴스" in title:
-                                press_name = "연합뉴스"
-                            elif "article/003/" in href or "newsis.com" in href or "뉴시스" in title:
-                                press_name = "뉴시스"
-                            elif "article/025/" in href or "joongang.co.kr" in href or "중앙일보" in title:
-                                press_name = "중앙일보"
-                            elif "journalist.or.kr" in href or "기자협회" in title:
-                                press_name = "한국기자협회"
+                                final_url = naver_url or origin_url
+                                if final_url and final_url not in seen_urls:
+                                    p_guess = press_name
+                                    if not p_guess:
+                                        if "article/421/" in final_url or "news1.kr" in final_url:
+                                            p_guess = "뉴스1"
+                                        elif "article/001/" in final_url or "yna.co.kr" in final_url:
+                                            p_guess = "연합뉴스"
+                                        elif "article/025/" in final_url or "joongang.co.kr" in final_url:
+                                            p_guess = "중앙일보"
+                                        elif "journalist.or.kr" in final_url:
+                                            p_guess = "한국기자협회"
+                                    if is_valid_wire_article(target_title, final_url, p_guess):
+                                        seen_urls.add(final_url)
+                                        articles.append({
+                                            "title": target_title,
+                                            "url": final_url,
+                                            "media": p_guess,
+                                            "date_text": ""
+                                        })
+                                        if len(articles) >= max_items:
+                                            break
 
-                            if press_name and is_valid_wire_article(title, href, press_name):
-                                seen_urls.add(href)
-                                articles.append({
-                                    "title": title,
-                                    "url": href,
-                                    "media": press_name,
-                                    "date_text": ""
-                                })
-                                if len(articles) >= max_items:
-                                    break
-                except Exception as e:
-                    pass
+                        # 2) 모바일 검색 보조
+                        if len(articles) < max_items:
+                            naver_url = f"https://m.search.naver.com/search.naver?where=m_news&query={quote(wq)}&sort={n_sort}&ds={start_year}.01.01&de={end_year}.12.31&nso={nso_sort},p:from{start_year}0101to{end_year}1231,a:all{start_param}"
+                            resp = cls.get_session().get(naver_url, headers=cls.HEADERS_MOBILE, timeout=3.5, verify=False)
+                            if resp.status_code == 200:
+                                soup = BeautifulSoup(resp.content, "html.parser")
+                                for a_elem in soup.find_all("a"):
+                                    href = a_elem.get("href", "")
+                                    title = html.unescape(a_elem.get_text(strip=True))
+                                    if not href or href in seen_urls or len(title) < 3:
+                                        continue
 
-        # 2. 다음 뉴스 검색 (결과가 부족할 때만 핵심 쿼리 1페이지 고속 탐색)
+                                    press_name = ""
+                                    if "article/421/" in href or "news1.kr" in href or "뉴스1" in title:
+                                        press_name = "뉴스1"
+                                    elif "article/001/" in href or "yna.co.kr" in href or "연합뉴스" in title:
+                                        press_name = "연합뉴스"
+                                    elif "article/003/" in href or "newsis.com" in href or "뉴시스" in title:
+                                        press_name = "뉴시스"
+                                    elif "article/025/" in href or "joongang.co.kr" in href or "중앙일보" in title:
+                                        press_name = "중앙일보"
+                                    elif "journalist.or.kr" in href or "기자협회" in title:
+                                        press_name = "한국기자협회"
+
+                                    if press_name and is_valid_wire_article(title, href, press_name):
+                                        seen_urls.add(href)
+                                        articles.append({
+                                            "title": title,
+                                            "url": href,
+                                            "media": press_name,
+                                            "date_text": ""
+                                        })
+                                        if len(articles) >= max_items:
+                                            break
+                    except Exception as e:
+                        pass
+
+        # 2. 다음 뉴스 검색 (결과가 부족할 때만 핵심 쿼리 1~2페이지 고속 탐색)
         if len(articles) < max_items:
             daum_queries = wire_queries[:2] if wire_queries else [query]
             period_param = f"&period=u&sd={start_year}0101000000&ed={end_year}1231235959" if (start_year and end_year) else ""
@@ -2547,47 +2553,47 @@ class OnlineNewsTracker:
             for wq in daum_queries:
                 if len(articles) >= max_items:
                     break
-                for p_num in [1]:
+                for p_num in [1, 2]:
                     if len(articles) >= max_items:
                         break
-                try:
-                    daum_sort = "recency" if sort_first == "date" else "accuracy"
-                    page_param = f"&p={p_num}" if p_num > 1 else ""
-                    daum_url = f"https://search.daum.net/search?w=news&q={quote(wq)}&sort={daum_sort}{period_param}{page_param}"
-                    resp = cls.get_session().get(daum_url, headers=cls.HEADERS, timeout=3.5, verify=False)
-                    if resp.status_code == 200:
-                        soup = BeautifulSoup(resp.content, "html.parser")
-                        card_items = soup.select("div.c-item-content, li.bx, div.item-title, ul.list_news > li")
-                        if not card_items:
-                            break
-                        for it in card_items:
-                            tit_a = it.select_one("strong.tit-doc a, .item-title a, a.tit_main, a.c-tit-doc")
-                            if not tit_a:
-                                continue
-                            title = html.unescape(tit_a.get_text(strip=True))
-                            press_elem = it.select_one(".item-subinfo .txt_info, a.f_nb, span.c-tit-info, .gem-subinfo a, span.info")
-                            press_name = press_elem.get_text(strip=True) if press_elem else ""
+                    try:
+                        daum_sort = "recency" if sort_first == "date" else "accuracy"
+                        page_param = f"&p={p_num}" if p_num > 1 else ""
+                        daum_url = f"https://search.daum.net/search?w=news&q={quote(wq)}&sort={daum_sort}{period_param}{page_param}"
+                        resp = cls.get_session().get(daum_url, headers=cls.HEADERS, timeout=3.5, verify=False)
+                        if resp.status_code == 200:
+                            soup = BeautifulSoup(resp.content, "html.parser")
+                            card_items = soup.select("div.c-item-content, li.bx, div.item-title, ul.list_news > li")
+                            if not card_items:
+                                break
+                            for it in card_items:
+                                tit_a = it.select_one("strong.tit-doc a, .item-title a, a.tit_main, a.c-tit-doc")
+                                if not tit_a:
+                                    continue
+                                title = html.unescape(tit_a.get_text(strip=True))
+                                press_elem = it.select_one(".item-subinfo .txt_info, a.f_nb, span.c-tit-info, .gem-subinfo a, span.info")
+                                press_name = press_elem.get_text(strip=True) if press_elem else ""
 
-                            daum_inlink = it.select_one("a[href*='v.daum.net/v/'], a[href*='news.v.daum.net/v/']")
-                            href = daum_inlink.get("href", "") if daum_inlink else tit_a.get("href", "")
-                            if not href or href in seen_urls:
-                                continue
+                                daum_inlink = it.select_one("a[href*='v.daum.net/v/'], a[href*='news.v.daum.net/v/']")
+                                href = daum_inlink.get("href", "") if daum_inlink else tit_a.get("href", "")
+                                if not href or href in seen_urls:
+                                    continue
 
-                            if is_valid_wire_article(title, href, press_name):
-                                seen_urls.add(href)
-                                d_match = re.search(r"v\.daum\.net/v/(\d{4})(\d{2})(\d{2})", href)
-                                d_text = f"{d_match.group(1)}-{d_match.group(2)}-{d_match.group(3)}" if d_match else ""
-                                m_guess = "뉴스1" if ("뉴스1" in press_name or "news1.kr" in href) else ("연합뉴스" if ("연합뉴스" in press_name or "yna.co.kr" in href) else ("뉴시스" if ("뉴시스" in press_name or "newsis.com" in href) else ("중앙일보" if ("중앙일보" in press_name or "joongang.co.kr" in href) else ("한국기자협회" if ("기자협회" in press_name or "journalist.or.kr" in href) else "언론사"))))
-                                articles.append({
-                                    "title": title,
-                                    "url": href,
-                                    "media": m_guess,
-                                    "date_text": d_text
-                                })
-                                if len(articles) >= max_items:
-                                    break
-                except Exception as e:
-                    pass
+                                if is_valid_wire_article(title, href, press_name):
+                                    seen_urls.add(href)
+                                    d_match = re.search(r"v\.daum\.net/v/(\d{4})(\d{2})(\d{2})", href)
+                                    d_text = f"{d_match.group(1)}-{d_match.group(2)}-{d_match.group(3)}" if d_match else ""
+                                    m_guess = "뉴스1" if ("뉴스1" in press_name or "news1.kr" in href) else ("연합뉴스" if ("연합뉴스" in press_name or "yna.co.kr" in href) else ("뉴시스" if ("뉴시스" in press_name or "newsis.com" in href) else ("중앙일보" if ("중앙일보" in press_name or "joongang.co.kr" in href) else ("한국기자협회" if ("기자협회" in press_name or "journalist.or.kr" in href) else "언론사"))))
+                                    articles.append({
+                                        "title": title,
+                                        "url": href,
+                                        "media": m_guess,
+                                        "date_text": d_text
+                                    })
+                                    if len(articles) >= max_items:
+                                        break
+                    except Exception as e:
+                        pass
 
         return articles
 
@@ -2641,16 +2647,29 @@ class OnlineNewsTracker:
                     except Exception as e:
                         pass
 
-                # 2. 일반 DOM 본문 영역 탐색 (한국기자협회 #news_body_area, 연합뉴스 story-news 및 포털 인링크 등)
+                # 2. 일반 DOM 본문 영역 탐색 (한국기자협회 #news_body_area, 연합뉴스 story-news, 헤럴드 #articleText 및 주요 언론사별 전용 셀렉터)
                 if not full_text:
                     content_area = (
                         soup.select_one("#news_body_area") or
+                        soup.select_one("#articleText") or
                         soup.select_one("article.story-news") or
                         soup.select_one("div.story-news") or
                         soup.select_one("#dic_area") or
                         soup.select_one("#newsct_article") or
                         soup.select_one("article#dic_area") or
                         soup.select_one("div#newsct_article") or
+                        soup.select_one("section.article-body") or
+                        soup.select_one("#news_body_id") or
+                        soup.select_one("#article_txt") or
+                        soup.select_one(".article_txt") or
+                        soup.select_one("#articletxt") or
+                        soup.select_one(".art_txt") or
+                        soup.select_one("#NewsAdContent") or
+                        soup.select_one("#article_content") or
+                        soup.select_one("#textBody") or
+                        soup.select_one(".news_body") or
+                        soup.select_one("#news_body") or
+                        soup.select_one("#v-left-scroll-in") or
                         soup.select_one("section.article-view") or
                         soup.select_one("#harmonyContainer") or
                         soup.select_one("div.article_view") or
@@ -2756,13 +2775,15 @@ class OnlineNewsTracker:
         if full_history:
             intervals = [
                 (2025, 2026, "date"),
-                (2024, 2024, "date"),
-                (2023, 2023, "date"),
-                (2021, 2022, "sim"),
-                (2018, 2020, "sim"),
-                (2014, 2017, "sim"),
-                (2010, 2013, "sim"),
-                (1965, 2009, "sim")
+                (2023, 2024, "date"),
+                (2021, 2022, "date"),
+                (2019, 2020, "sim"),
+                (2017, 2018, "sim"),
+                (2015, 2016, "sim"),
+                (2013, 2014, "sim"),
+                (2011, 2012, "sim"),
+                (2009, 2010, "sim"),
+                (2005, 2008, "sim")
             ]
             sec_pages = 2
         else:
@@ -3006,13 +3027,15 @@ class OnlineNewsTracker:
         if full_history:
             intervals = [
                 (2025, 2026, "date"),
-                (2024, 2024, "date"),
-                (2023, 2023, "date"),
-                (2021, 2022, "sim"),
-                (2018, 2020, "sim"),
-                (2014, 2017, "sim"),
-                (2010, 2013, "sim"),
-                (1965, 2009, "sim")
+                (2023, 2024, "date"),
+                (2021, 2022, "date"),
+                (2019, 2020, "sim"),
+                (2017, 2018, "sim"),
+                (2015, 2016, "sim"),
+                (2013, 2014, "sim"),
+                (2011, 2012, "sim"),
+                (2009, 2010, "sim"),
+                (2005, 2008, "sim")
             ]
             sec_pages = 2
         else:
@@ -3398,13 +3421,15 @@ class OnlineNewsTracker:
         if full_history:
             intervals = [
                 (2025, 2026, "date"),
-                (2024, 2024, "date"),
-                (2023, 2023, "date"),
-                (2021, 2022, "sim"),
-                (2018, 2020, "sim"),
-                (2014, 2017, "sim"),
-                (2010, 2013, "sim"),
-                (1965, 2009, "sim")
+                (2023, 2024, "date"),
+                (2021, 2022, "date"),
+                (2019, 2020, "sim"),
+                (2017, 2018, "sim"),
+                (2015, 2016, "sim"),
+                (2013, 2014, "sim"),
+                (2011, 2012, "sim"),
+                (2009, 2010, "sim"),
+                (2005, 2008, "sim")
             ]
             sec_pages = 2
         else:
@@ -4626,7 +4651,7 @@ class MediaDatabase:
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
 
-    def search_records(self, name: str = "", media: str = "", dept: str = "", rank: str = "", limit: int = 2000) -> List[Dict[str, Any]]:
+    def search_records(self, name: str = "", media: str = "", dept: str = "", rank: str = "", limit: int = 25000) -> List[Dict[str, Any]]:
         # 복합 검색어 자동 분리 (예: media="뉴스1 건설부동산" -> media="뉴스1", dept="건설부동산")
         if media and not dept:
             m_chk = media.strip()

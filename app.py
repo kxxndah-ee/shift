@@ -1423,7 +1423,7 @@ with tab_search:
                                 "직급": r.get("rank_title", ""),
                                 "성명": r.get("name", ""),
                                 "기사원문(링크주소)": r.get("article_url", "")
-                            } for r in unique_matched[:500]])
+                            } for r in unique_matched[:5000]])
                             st.dataframe(
                                 df_display,
                                 column_config={
@@ -1545,7 +1545,7 @@ with tab_search:
                             "직급": r.get("rank_title", ""),
                             "성명": r.get("name", ""),
                             "기사원문(링크주소)": r.get("article_url", "")
-                        } for r in unique_matched[:500]])
+                        } for r in unique_matched[:5000]])
                         st.dataframe(
                             df_display,
                             column_config={
@@ -1732,7 +1732,7 @@ with tab_search:
                 "직급": _resolve_display_rank(r, r_val),
                 "성명": r.get("name", ""),
                 "기사원문(링크주소)": r.get("article_url", "")
-            } for r in unique_matched[:500]])
+            } for r in unique_matched[:5000]])
             st.dataframe(
                 df_display,
                 column_config={
@@ -1908,7 +1908,7 @@ with tab_search:
                 "직급": r.get("rank_title", ""),
                 "성명": r.get("name", ""),
                 "기사원문(링크주소)": r.get("article_url", "")
-            } for r in unique_matched[:500]])
+            } for r in unique_matched[:5000]])
             st.dataframe(
                 df_display,
                 column_config={
