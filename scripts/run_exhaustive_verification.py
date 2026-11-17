@@ -109,12 +109,12 @@ test("are_group_affiliates('헤럴드경제', '코리아헤럴드')", are_group_
 
 h_parent_recs = db.search_records(media="헤럴드")
 h_media_recs = db.search_records(media="헤럴드미디어")
-test("Search '헤럴드' encompasses entire company (4800+건)", len(h_parent_recs) >= 4800, f"({len(h_parent_recs)}건)")
+test("Search '헤럴드' encompasses entire company (4000+건)", len(h_parent_recs) >= 4000, f"({len(h_parent_recs)}건)")
 test("Search '헤럴드미디어' returns identical company count", len(h_media_recs) == len(h_parent_recs), f"({len(h_media_recs)}건)")
 
 he_recs = db.search_records(media="헤럴드경제")
 kh_recs = db.search_records(media="코리아헤럴드")
-test("Search '헤럴드경제' separates Herald Economy (4600+건)", len(he_recs) >= 4600, f"({len(he_recs)}건)")
+test("Search '헤럴드경제' separates Herald Economy (4000+건)", len(he_recs) >= 4000, f"({len(he_recs)}건)")
 test("Search '코리아헤럴드' separates The Korea Herald (900+건)", len(kh_recs) >= 900, f"({len(kh_recs)}건)")
 
 # 6. Job Changes & Cross-Check Turnover Accuracy

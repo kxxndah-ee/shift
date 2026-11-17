@@ -940,6 +940,21 @@ class PersonnelRegexParser:
         if not article_text:
             return results
 
+        # 발행일자가 누락된 경우 URL, 기사 제목, 본문 상단에서 지능형 추출
+        if not pub_date:
+            if article_url:
+                m_url = re.search(r"[/v=](\d{4})(\d{2})(\d{2})", article_url)
+                if m_url:
+                    pub_date = f"{m_url.group(1)}-{m_url.group(2)}-{m_url.group(3)}"
+            if not pub_date and article_title:
+                m_tit = re.search(r"(\d{4})[년.\-/\s]+(\d{1,2})[월.\-/\s]+(\d{1,2})", article_title)
+                if m_tit:
+                    pub_date = f"{m_tit.group(1)}-{int(m_tit.group(2)):02d}-{int(m_tit.group(3)):02d}"
+            if not pub_date and article_text:
+                m_body = re.search(r"(\d{4})[년.\-/\s]+(\d{1,2})[월.\-/\s]+(\d{1,2})[일자]?", article_text[:1000])
+                if m_body:
+                    pub_date = f"{m_body.group(1)}-{int(m_body.group(2)):02d}-{int(m_body.group(3)):02d}"
+
         # 제목에서 언론사 힌트 파악 (예: [인사] 아이뉴스24, [인사] 아시아투데이, [인사] 뉴스1)
         clean_article_title = re.sub(r"(?:연합뉴스|뉴스1)?\s*\d{4}\.\d{2}\.\d{2}\.?\s*네이버뉴스.*$", "", html.unescape(article_title)).strip()
         title_media_match = re.search(r"(?:\[인사\]|<인사>|【인사】|\(인사\))\s*([가-힣A-Za-z0-9]+)", clean_article_title)
@@ -1172,13 +1187,16 @@ class PersonnelRegexParser:
                         last_bureau=current_bureau
                     )
                     for rec in sub_records:
-                        rec["pub_date"] = pub_date or str(datetime.date.today())
+                        rec["pub_date"] = pub_date or ""
                         rec["article_title"] = article_title or ""
                         rec["article_url"] = article_url or ""
+                        # 날짜 왜곡 방지: 발행일자가 확인되지 않는 기사는 오늘 날짜로 조작하지 않고 누적 제외
+                        if not rec.get("pub_date"):
+                            continue
                         results.append(rec)
 
                         # 타부서/이전 소속 정보가 존재할 경우 이전 부서 발령 레코드 자동 파생 등록
-                        if former_dept_raw and rec.get("name"):
+                        if former_dept_raw and rec.get("name") and rec.get("pub_date"):
                             f_rank = ""
                             f_dept = former_dept_raw
                             for r_cand in SORTED_RANKS:
@@ -1200,7 +1218,7 @@ class PersonnelRegexParser:
                                 "rank_level": f_rank_lvl,
                                 "domain": classify_domain(f_dept),
                                 "email": rec.get("email", ""),
-                                "pub_date": pub_date or str(datetime.date.today()),
+                                "pub_date": rec["pub_date"],
                                 "action_type": f"전보 (이전 소속: {f_dept})",
                                 "article_title": article_title or "",
                                 "article_url": article_url or "",
@@ -2416,7 +2434,7 @@ class OnlineNewsTracker:
 
                 fetched = cls.fetch_full_text(art_url)
                 body = fetched.get("text", "")
-                pub_date = fetched.get("pub_date") or str(datetime.date.today())
+                pub_date = fetched.get("pub_date") or ""
                 art_media = fetched.get("media", "중앙일보")
 
                 # 기사 메타데이터 영속화 (다음 수집 시 중복 방지)
@@ -4112,12 +4130,13 @@ class OnlineNewsTracker:
             fetched = cls.fetch_full_text(art["url"])
             body = fetched["text"]
             media = fetched["media"] if fetched["media"] != "온라인뉴스" else art["media"]
+            pub_date = art.get("date_text") or fetched.get("pub_date") or ""
             if body and len(body) >= 50:
                 recs = PersonnelRegexParser.parse_article_text(
                     article_text=body,
                     default_media=media,
                     article_title=art["title"],
-                    pub_date=art.get("date_text", str(datetime.date.today()))
+                    pub_date=pub_date
                 )
                 for r in recs:
                     if fetched["email"] and not r.get("email"):
