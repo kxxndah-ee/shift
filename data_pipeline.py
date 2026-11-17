@@ -3027,6 +3027,8 @@ class OnlineNewsTracker:
                 f'{name} [인사] 뉴스1',
                 f'{name} [인사] 중앙일보',
             ]
+            if not full_history and len(q_list) > 3:
+                q_list = q_list[:3]
             for q in q_list:
                 search_tasks.append((q, sy, ey, sort_type))
 
@@ -3377,6 +3379,9 @@ class OnlineNewsTracker:
                     f'{dept_clean} [인사] 중앙일보',
                 ])
 
+            if not full_history and len(q_list) > 4:
+                q_list = q_list[:4]
+
             for q in q_list:
                 search_tasks.append((q, sy, ey, sort_type))
 
@@ -3679,6 +3684,10 @@ class OnlineNewsTracker:
             if media_clean and not media_clean.endswith(("신문", "방송", "뉴스", "통신", "일보", "타임스", "타임즈")):
                 q_list.append(f'"{media_clean}신문" "{name_clean}" 인사')
                 q_list.append(f'{media_clean}신문 "{name_clean}" [인사]')
+
+            if not full_history and len(q_list) > 4:
+                q_list = q_list[:4]
+
             for q in q_list:
                 search_tasks.append((q, sy, ey, sort_type))
 

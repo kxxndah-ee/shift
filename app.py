@@ -15,7 +15,7 @@ import json
 import datetime
 import threading
 import base64
-from typing import Dict, List, Any, Optional, Set, Tuple
+from typing import Dict, List, Any, Optional, Set, Tuple, Callable
 from pathlib import Path
 from PIL import Image
 import pandas as pd
@@ -539,15 +539,33 @@ def get_cached_stats():
 stats = get_cached_stats()
 
 
-def display_search_progress(target_desc: str, placeholder: Any, total_found: int = 0):
+def display_search_progress(
+    target_desc: str, 
+    placeholder: Any, 
+    total_found: int = 0,
+    online_sync_fn: Optional[Callable[[], Any]] = None,
+    count_calc_fn: Optional[Callable[[], int]] = None
+) -> int:
     """
-    검색 버튼 클릭 시 사용자가 요청한 검색 진행률(검색률 0% -> 25% -> 55% -> 85% -> 100%)을
-    시각적인 진행 표시줄(st.progress)과 안내 문구로 부드럽고 신속하게 표시합니다.
+    검색 버튼 클릭 시 실시간 온라인 포털 탐색과 마스터 아카이브 DB 색인을 기본 통합 수행하며,
+    검색 진행률(검색률: 10% -> 35% -> 70% -> 90% -> 100%)을 시각적으로 안내합니다.
     """
     p_bar = placeholder.progress(10, text="검색 시작 : 검색어 정규화 및 토큰 분석 중 (검색률: 10%)")
     time.sleep(0.04)
-    p_bar.progress(35, text="42,975건 마스터 아카이브 DB 고속 색인 탐색 중 (검색률: 35%)")
-    time.sleep(0.06)
+    p_bar.progress(35, text="포털 실시간 최신 인사 기사 동기화 및 마스터 DB 색인 탐색 중 (검색률: 35%)")
+    
+    if online_sync_fn:
+        try:
+            online_sync_fn()
+        except Exception:
+            pass
+
+    if count_calc_fn:
+        try:
+            total_found = count_calc_fn()
+        except Exception:
+            pass
+
     p_bar.progress(70, text="언론사 계열/별칭 그룹 매칭 및 이직·승진 타임라인 교차 검증 중 (검색률: 70%)")
     time.sleep(0.06)
     p_bar.progress(90, text="검색 결과 정밀 필터링 및 랭킹 정렬 중 (검색률: 90%)")
@@ -557,6 +575,7 @@ def display_search_progress(target_desc: str, placeholder: Any, total_found: int
     p_bar.progress(100, text=result_text)
     time.sleep(0.18)
     placeholder.empty()
+    return total_found
 
 
 def render_search_completion_indicator(total_records: int, total_reporters: int = 0, query_desc: str = ""):
@@ -569,7 +588,7 @@ def render_search_completion_indicator(total_records: int, total_reporters: int 
     <div style="display:flex; align-items:center; justify-content:space-between; margin-top:8px; margin-bottom:14px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:10px 16px;">
         <div style="display:flex; align-items:center; gap:10px;">
             <span class="badge badge-normal" style="font-weight:700; background:#EEF2FF; color:#4F46E5; border:1px solid #C7D2FE; padding:3px 10px; border-radius:6px; font-size:0.85rem;">검색률: 100%</span>
-            <span style="font-size:0.9rem; color:#1E293B; font-weight:600;">마스터 아카이브(42,975건) 정밀 색인 탐색 완료{desc_txt}</span>
+            <span style="font-size:0.9rem; color:#1E293B; font-weight:600;">마스터 아카이브(42,975건) 및 실시간 포털 탐색 완료{desc_txt}</span>
         </div>
         <div style="font-size:0.85rem; color:#64748B;">
             총 <b>{total_records}</b>건 발령 기록 확인{rep_txt} · 전체 아카이브 (2000년 ~ 2026년)
@@ -687,38 +706,38 @@ with tab_search:
                 else:
                     st.warning("검색할 기자 이름을 입력해주세요.")
 
-        # 검색 진행률(검색률) 애니메이션 표시
+        # 검색 진행률(검색률) 및 실시간 온라인 포털 기본 동기화
         if st.session_state.get("search_trigger_name"):
             st.session_state["search_trigger_name"] = False
             target_name = st.session_state.get("active_search_name", "")
             prog_box = st.empty()
 
-            parsed = parse_composite_search_query(target_name)
-            if parsed["media"] or parsed["dept"] or parsed["rank"]:
-                p_m, p_d, p_r, p_n = parsed["media"], parsed["dept"], parsed["rank"], parsed["name"]
-                cnt_recs = len(db.search_records(media=p_m, dept=p_d, rank=p_r, name=p_n))
-            else:
-                cnt_recs = len(db.search_records(name=target_name))
-            display_search_progress(target_name, prog_box, total_found=cnt_recs)
-
-        with st.expander("실시간 온라인 포털 추가 탐색 (최신 뉴스 수집)", expanded=False):
-            st.caption("공식 아카이브 DB(42,975건) 외에 포털 최신 인사 기사를 실시간 크롤링하여 동기화합니다.")
-            col_on1, col_on2 = st.columns([2.5, 1])
-            with col_on1:
-                online_target = st.text_input("기자 이름", value=st.session_state.get("active_search_name", ""), key="online_name_in", label_visibility="collapsed")
-            with col_on2:
-                btn_online_sync = st.button("실시간 탐색", type="secondary", use_container_width=True, key="btn_online_name")
-            if btn_online_sync and online_target.strip():
-                p_box = st.empty()
-                p_bar = p_box.progress(10, text="포털 최신 기사 탐색 중... (검색률: 10%)")
+            def sync_name_online():
                 nid = get_secret("naver_client_id", "")
                 nsec = get_secret("naver_client_secret", "")
-                res = OnlineNewsTracker.track_reporter_online(online_target.strip(), client_id=nid, client_secret=nsec, full_history=False)
-                p_bar.progress(100, text=f"탐색 완료 (검색률: 100%) : {res.get('message', '동기화 완료')}")
-                time.sleep(0.4)
-                p_box.empty()
-                st.session_state["active_search_name"] = online_target.strip()
-                st.rerun()
+                parsed = parse_composite_search_query(target_name)
+                sync_target = parsed["name"] if parsed.get("name") else target_name
+                OnlineNewsTracker.track_reporter_online(
+                    reporter_name=sync_target,
+                    client_id=nid,
+                    client_secret=nsec,
+                    full_history=False
+                )
+
+            def calc_count_name():
+                parsed = parse_composite_search_query(target_name)
+                if parsed["media"] or parsed["dept"] or parsed["rank"]:
+                    p_m, p_d, p_r, p_n = parsed["media"], parsed["dept"], parsed["rank"], parsed["name"]
+                    return len(db.search_records(media=p_m, dept=p_d, rank=p_r, name=p_n))
+                else:
+                    return len(db.search_records(name=target_name))
+
+            display_search_progress(
+                target_desc=target_name,
+                placeholder=prog_box,
+                online_sync_fn=sync_name_online,
+                count_calc_fn=calc_count_name
+            )
 
     # 2. 매체·부서 검색 (검색 버튼 포함, 50% 길이 축소)
     elif search_mode == "매체·부서 검색":
@@ -788,7 +807,7 @@ with tab_search:
                 else:
                     st.warning("매체명, 부서명 또는 직급명을 입력해주세요.")
 
-        # 검색 진행률(검색률) 애니메이션 표시
+        # 검색 진행률(검색률) 및 실시간 온라인 포털 기본 동기화
         if st.session_state.get("search_trigger_media"):
             st.session_state["search_trigger_media"] = False
             m_val = st.session_state.get("filter_media_val", "")
@@ -797,29 +816,31 @@ with tab_search:
             kw_display = " ".join(filter(None, [m_val, d_val, r_val]))
 
             prog_box = st.empty()
-            cnt_recs = len(db.search_records(media=m_val, dept=d_val, rank=r_val))
-            if not cnt_recs and r_val and (m_val or d_val):
-                cnt_recs = len(db.search_records(media=m_val, dept=d_val))
-            display_search_progress(kw_display, prog_box, total_found=cnt_recs)
 
-        with st.expander("실시간 온라인 포털 추가 탐색 (최신 뉴스 수집)", expanded=False):
-            st.caption("공식 아카이브 DB(42,975건) 외에 포털 최신 인사 기사를 실시간 크롤링하여 동기화합니다.")
-            btn_online_media = st.button("실시간 포털 탐색", type="secondary", use_container_width=True, key="btn_online_media")
-            if btn_online_media and (st.session_state.get("filter_media_val") or st.session_state.get("filter_dept_val")):
-                p_box = st.empty()
-                p_bar = p_box.progress(10, text="포털 최신 기사 탐색 중... (검색률: 10%)")
+            def sync_media_dept_online():
                 nid = get_secret("naver_client_id", "")
                 nsec = get_secret("naver_client_secret", "")
-                res = OnlineNewsTracker.track_media_dept_online(
-                    media=st.session_state.get("filter_media_val", ""),
-                    dept=st.session_state.get("filter_dept_val", ""),
-                    rank=st.session_state.get("filter_rank_val", ""),
-                    client_id=nid, client_secret=nsec, full_history=False
+                OnlineNewsTracker.track_media_dept_online(
+                    media=m_val,
+                    dept=d_val,
+                    rank=r_val,
+                    client_id=nid,
+                    client_secret=nsec,
+                    full_history=False
                 )
-                p_bar.progress(100, text=f"탐색 완료 (검색률: 100%) : {res.get('message', '동기화 완료')}")
-                time.sleep(0.4)
-                p_box.empty()
-                st.rerun()
+
+            def calc_count_media_dept():
+                cnt = len(db.search_records(media=m_val, dept=d_val, rank=r_val))
+                if not cnt and r_val and (m_val or d_val):
+                    cnt = len(db.search_records(media=m_val, dept=d_val))
+                return cnt
+
+            display_search_progress(
+                target_desc=kw_display,
+                placeholder=prog_box,
+                online_sync_fn=sync_media_dept_online,
+                count_calc_fn=calc_count_media_dept
+            )
 
     # 3. 매체·이름 검색 (매체명 + 기자 이름)
     elif search_mode == "매체·이름 검색":
@@ -856,7 +877,7 @@ with tab_search:
                 else:
                     st.warning("매체명 또는 기자 이름을 입력해주세요.")
 
-        # 검색 진행률(검색률) 애니메이션 표시
+        # 검색 진행률(검색률) 및 실시간 온라인 포털 기본 동기화
         if st.session_state.get("search_trigger_mn"):
             st.session_state["search_trigger_mn"] = False
             m_val = st.session_state.get("filter_mn_media_val", "")
@@ -864,26 +885,27 @@ with tab_search:
             kw_display = " ".join(filter(None, [m_val, n_val]))
 
             prog_box = st.empty()
-            cnt_recs = len(db.search_records(media=m_val, name=n_val))
-            display_search_progress(kw_display, prog_box, total_found=cnt_recs)
 
-        with st.expander("실시간 온라인 포털 추가 탐색 (최신 뉴스 수집)", expanded=False):
-            st.caption("공식 아카이브 DB(42,975건) 외에 포털 최신 인사 기사를 실시간 크롤링하여 동기화합니다.")
-            btn_online_mn = st.button("실시간 포털 탐색", type="secondary", use_container_width=True, key="btn_online_mn")
-            if btn_online_mn and (st.session_state.get("filter_mn_media_val") or st.session_state.get("filter_mn_name_val")):
-                p_box = st.empty()
-                p_bar = p_box.progress(10, text="포털 최신 기사 탐색 중... (검색률: 10%)")
+            def sync_media_name_online():
                 nid = get_secret("naver_client_id", "")
                 nsec = get_secret("naver_client_secret", "")
-                res = OnlineNewsTracker.track_media_name_online(
-                    media=st.session_state.get("filter_mn_media_val", ""),
-                    name=st.session_state.get("filter_mn_name_val", ""),
-                    client_id=nid, client_secret=nsec, full_history=False
+                OnlineNewsTracker.track_media_name_online(
+                    media=m_val,
+                    name=n_val,
+                    client_id=nid,
+                    client_secret=nsec,
+                    full_history=False
                 )
-                p_bar.progress(100, text=f"탐색 완료 (검색률: 100%) : {res.get('message', '동기화 완료')}")
-                time.sleep(0.4)
-                p_box.empty()
-                st.rerun()
+
+            def calc_count_media_name():
+                return len(db.search_records(media=m_val, name=n_val))
+
+            display_search_progress(
+                target_desc=kw_display,
+                placeholder=prog_box,
+                online_sync_fn=sync_media_name_online,
+                count_calc_fn=calc_count_media_name
+            )
 
     selected_reporter_id = None
 
@@ -1610,8 +1632,10 @@ with tab_search:
                         o_tl = other_timelines.get(o_rep["reporter_id"], [])
                         render_single_reporter_profile(o_rep, o_tl, db, key_suffix=f"other_{o_idx}")
                 else:
+                    render_search_completion_indicator(total_records=0, total_reporters=0, query_desc=f"{m_filter} {active_name}".strip())
                     st.info(f"아카이브 전체 기간 온라인 공식 인사 기사에서 '{m_filter}' 소속 '{active_name}' 기자의 발령 기록을 찾지 못했습니다.")
             else:
+                render_search_completion_indicator(total_records=0, total_reporters=0, query_desc=active_name)
                 st.info(f"온라인 인사 기사에서 '{active_name}' 기자의 발령 기록을 찾지 못했습니다.")
 
     # 매체·부서 검색 또는 기자 이름 미입력 상태의 매체 검색 처리
@@ -1622,6 +1646,7 @@ with tab_search:
 
         if not matched_records:
             target_kw = composite_title or " ".join(filter(None, [m_val, d_val, r_val]))
+            render_search_completion_indicator(total_records=0, total_reporters=0, query_desc=target_kw)
             st.info(f"조건에 부합하는 온라인 인사 발령 기록(아카이브 전체 기간)을 찾지 못했습니다: '{target_kw}'")
         else:
             unique_matched = MediaDatabase.deduplicate_timeline_records(matched_records, window_days=60, sort_desc=True)
