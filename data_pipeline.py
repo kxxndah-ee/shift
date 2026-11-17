@@ -206,7 +206,7 @@ MEDIA_GROUP_ALIASES: Dict[str, List[str]] = {
     "문화일보": ["문화일보사"],
     "서울경제": ["서울경제신문", "서울경제신문사", "서경", "서경마켓"],
     "아시아경제": ["아시아경제신문", "아시아경제신문사", "아경"],
-    "헤럴드경제": ["헤럴드경제신문", "헤경", "헤럴드", "헤럴드미디어", "코리아헤럴드"],
+    "헤럴드경제": ["헤럴드경제신문", "헤경", "헤럴드", "(주)헤럴드", "주식회사 헤럴드", "헤럴드미디어", "코리아헤럴드", "헤럴드아트데이", "헤럴드에듀", "헤럴드디자인", "헤럴드팝", "heraldcorp", "heraldbiz", "heraldcorp.com"],
     "파이낸셜뉴스": ["파이낸셜", "fnnews", "파이낸셜뉴스신문사"],
     "머니투데이": ["머니투데이신문", "머니투데이그룹", "머니투데이미디어", "머투"],
     "머니투데이방송": ["MTN", "머니투데이방송", "mtn"],
@@ -393,7 +393,7 @@ def normalize_media_name(raw_name: str) -> str:
     if "매일경제" in name or name in ["매경", "매경닷컴", "매경미디어", "매경미디어그룹"] or "매경미디어" in name: return "매일경제"
     if "서울경제" in name or name in ["서경", "서경마켓"]: return "서울경제"
     if "아시아경제" in name or name in ["아경"]: return "아시아경제"
-    if "헤럴드" in name: return "헤럴드경제"
+    if "헤럴드" in name or "herald" in n_compact: return "헤럴드경제"
     if "파이낸셜" in name: return "파이낸셜뉴스"
     if "머니투데이" in n_compact or "머투" in n_compact: return "머니투데이"
     if "이데일리m" in name.lower() or "이데일리 m" in name.lower(): return "이데일리M"
@@ -4569,9 +4569,16 @@ class MediaDatabase:
             sql = f"(({col_name} LIKE ? OR {col_name} LIKE ?) AND {col_name} NOT LIKE '%TV%' AND {col_name} NOT LIKE '%tv%')"
             return sql, [f"%{m_raw}%", f"%{m_norm}%"]
 
-        # 기본: 일반 매체
-        sql = f"({col_name} LIKE ? OR {col_name} LIKE ?)"
-        return sql, [f"%{m_raw}%", f"%{m_norm}%"]
+        # 기본: 일반 매체 및 계열/별칭 포괄 매칭
+        aliases = MEDIA_GROUP_ALIASES.get(m_norm, [])
+        clauses = [f"{col_name} LIKE ?", f"{col_name} LIKE ?"]
+        params = [f"%{m_raw}%", f"%{m_norm}%"]
+        for a in aliases:
+            if len(a) >= 2 and a not in [m_raw, m_norm] and not a.startswith("http"):
+                clauses.append(f"{col_name} LIKE ?")
+                params.append(f"%{a}%")
+        sql = f"({' OR '.join(clauses)})"
+        return sql, params
 
     def search_reporters(self, name: str = "", media: str = "", dept: str = "", rank: str = "") -> List[Dict[str, Any]]:
         # 복합 검색어 자동 분리 (예: media="뉴스1 건설부동산" -> media="뉴스1", dept="건설부동산")
