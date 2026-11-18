@@ -940,6 +940,7 @@ with tab_search:
     alt_search_note = ""
     is_composite_search = False
     composite_title = ""
+    dept_all_records = []
 
     if search_mode == "이름 검색":
         active_name = st.session_state.get("active_search_name", "")
@@ -972,8 +973,13 @@ with tab_search:
                         r for r in db.search_reporters(media=p_m, dept=p_d, rank=p_r)
                         if not is_media_organization(r["name"]) and not is_excluded_department(r.get("current_dept", ""))
                     ]
+                    if p_d and (p_m or p_d):
+                        dept_all_records = [
+                            r for r in db.search_records(media=p_m, dept=p_d)
+                            if is_media_organization(r.get("media", "")) and (not r.get("article_title") or is_personnel_article_title(r.get("article_title", ""))) and not is_excluded_department(r.get("dept", ""))
+                        ]
                     if not matched_records and p_r and (p_m or p_d):
-                        alt_records = [
+                        alt_records = dept_all_records or [
                             r for r in db.search_records(media=p_m, dept=p_d)
                             if is_media_organization(r.get("media", "")) and (not r.get("article_title") or is_personnel_article_title(r.get("article_title", ""))) and not is_excluded_department(r.get("dept", ""))
                         ]
@@ -1010,9 +1016,14 @@ with tab_search:
                 r for r in db.search_records(media=m_val, dept=d_val, rank=r_val)
                 if is_media_organization(r.get("media", "")) and (not r.get("article_title") or is_personnel_article_title(r.get("article_title", ""))) and not is_excluded_department(r.get("dept", ""))
             ]
+            if d_val and (m_val or d_val):
+                dept_all_records = [
+                    r for r in db.search_records(media=m_val, dept=d_val)
+                    if is_media_organization(r.get("media", "")) and (not r.get("article_title") or is_personnel_article_title(r.get("article_title", ""))) and not is_excluded_department(r.get("dept", ""))
+                ]
             # 직급(예: 부장) 조건으로 0건일 때, 동일 부서(예: 건설부동산부) 타 직급(차장 등) 발령 자동 감지 및 안내
             if not matched_records and r_val and (m_val or d_val):
-                alt_records = [
+                alt_records = dept_all_records or [
                     r for r in db.search_records(media=m_val, dept=d_val)
                     if is_media_organization(r.get("media", "")) and (not r.get("article_title") or is_personnel_article_title(r.get("article_title", ""))) and not is_excluded_department(r.get("dept", ""))
                 ]
@@ -1685,6 +1696,29 @@ with tab_search:
             unique_matched = MediaDatabase.deduplicate_timeline_records(matched_records, window_days=60, sort_desc=True)
             unique_matched = [r for r in unique_matched if not is_excluded_department(r.get("dept", ""))]
 
+            dept_all_unique = []
+            if dept_all_records:
+                dept_all_unique = MediaDatabase.deduplicate_timeline_records(dept_all_records, window_days=60, sort_desc=True)
+                dept_all_unique = [r for r in dept_all_unique if not is_excluded_department(r.get("dept", ""))]
+
+            show_dept_all = False
+            if r_val and dept_all_unique and len(dept_all_unique) > len(unique_matched):
+                d_all_dates = [str(r.get("pub_date", ""))[:10] for r in dept_all_unique if r.get("pub_date")]
+                d_all_min = min(d_all_dates)[:7] if d_all_dates else ""
+                d_all_max = max(d_all_dates)[:7] if d_all_dates else ""
+                dep_label = f"{m_val} {d_val}".strip()
+                st.info(
+                    f"'{dep_label}' 부서의 '{r_val}' 직급 발령({len(unique_matched)}건) 외에도, "
+                    f"과거 부서장/데스크(팀장, 차장대우 등)를 포함한 동일 부서 역대 발령 총 {len(dept_all_unique)}건({d_all_min} ~ {d_all_max})이 아카이브에 보유되어 있습니다."
+                )
+                show_dept_all = st.checkbox(
+                    f"'{d_val}' 부서 역대 전체 직급(팀장·차장 등 {len(dept_all_unique)}건) 함께 보기",
+                    value=False,
+                    key="chk_show_dept_all_ranks"
+                )
+                if show_dept_all:
+                    unique_matched = dept_all_unique
+
             target_kw = composite_title or " ".join(filter(None, [m_val, d_val, r_val]))
             render_search_completion_indicator(total_records=len(unique_matched), total_reporters=len(filtered_reporters), query_desc=target_kw, media_name=m_val, db=db)
 
@@ -1783,6 +1817,10 @@ with tab_search:
                    - 예: **뉴스1** (2011년 8월 창간), **종합편성채널 4사(JTBC·TV조선·채널A·MBN)** (2011년 12월 개국), **데일리안** (2004년 창간 / 2005년 최초 발령), **조선비즈** (2010년 5월 출범 / 2014년 독립 인사 분리), **딜사이트** (2018년 창간 / 2023년 분리).
                 2. **디지털 뉴스룸 및 포털의 공식 인사 기사 전산화 시점**: 국내 주요 일간지 및 방송사는 지면 기사의 인터넷 전산화 및 포털 인사 기사 공식 송고가 체계화된 **2000년대 초반(대부분 2004~2006년)**부터 공식 인사 보도자료를 연속 누락 없이 전수 수집 및 관리하고 있습니다.
                 3. **검색 조건 발령 발생 기간과의 구분**: 특정 부서나 직급(예: '건설부동산 부장')으로 검색했을 때 표시되는 일자 범위는 '해당 보직의 발령이 발생한 시점'이며, 매체 자체의 아카이브는 정상적으로 창간/전산화 이래 20년 이상 전 기간 보유 중입니다.
+                4. **부서 승격 및 직급 체계 변화 (예: 팀장 ➔ 부장)**:
+                   - 언론사에 따라 특정 분야를 과거에는 '팀' 단위(팀장, 차장대우)로 운영하다가 이후 '부'(부장)로 편제 승격 및 분리 신설하는 경우가 많습니다.
+                   - 예: **데일리안**의 경우 건설·부동산 분야를 과거 **'생활경제부 건설부동산팀(팀장·차장대우)'**으로 운영(2019년 권이상 차장대우, 2020년 원나래 팀장·최동석 차장대우)하다가 **2025년 2월 '건설부동산부(부장)'로 분리 승격**되어 이홍석 부장이 초대 부장으로 보임되었습니다.
+                   - 따라서 '부장' 직급으로 검색 시 2025년 발령만 조회되는 것이 실제 공식 직제 역사와 정확히 일치하며, 과거 팀장/차장 시절의 이력을 함께 보시려면 '부서 역대 전체 직급 함께 보기' 옵션을 활용하실 수 있습니다.
                 """)
 
             def _resolve_display_rank(rec, search_rank):
@@ -2001,6 +2039,10 @@ with tab_search:
                    - 예: **뉴스1** (2011년 8월 창간), **종합편성채널 4사(JTBC·TV조선·채널A·MBN)** (2011년 12월 개국), **데일리안** (2004년 창간 / 2005년 최초 발령), **조선비즈** (2010년 5월 출범 / 2014년 독립 인사 분리), **딜사이트** (2018년 창간 / 2023년 분리).
                 2. **디지털 뉴스룸 및 포털의 공식 인사 기사 전산화 시점**: 국내 주요 일간지 및 방송사는 지면 기사의 인터넷 전산화 및 포털 인사 기사 공식 송고가 체계화된 **2000년대 초반(대부분 2004~2006년)**부터 공식 인사 보도자료를 연속 누락 없이 전수 수집 및 관리하고 있습니다.
                 3. **검색 조건 발령 발생 기간과의 구분**: 특정 부서나 직급(예: '건설부동산 부장')으로 검색했을 때 표시되는 일자 범위는 '해당 보직의 발령이 발생한 시점'이며, 매체 자체의 아카이브는 정상적으로 창간/전산화 이래 20년 이상 전 기간 보유 중입니다.
+                4. **부서 승격 및 직급 체계 변화 (예: 팀장 ➔ 부장)**:
+                   - 언론사에 따라 특정 분야를 과거에는 '팀' 단위(팀장, 차장대우)로 운영하다가 이후 '부'(부장)로 편제 승격 및 분리 신설하는 경우가 많습니다.
+                   - 예: **데일리안**의 경우 건설·부동산 분야를 과거 **'생활경제부 건설부동산팀(팀장·차장대우)'**으로 운영(2019년 권이상 차장대우, 2020년 원나래 팀장·최동석 차장대우)하다가 **2025년 2월 '건설부동산부(부장)'로 분리 승격**되어 이홍석 부장이 초대 부장으로 보임되었습니다.
+                   - 따라서 '부장' 직급으로 검색 시 2025년 발령만 조회되는 것이 실제 공식 직제 역사와 정확히 일치하며, 과거 팀장/차장 시절의 이력을 함께 보시려면 '부서 역대 전체 직급 함께 보기' 옵션을 활용하실 수 있습니다.
                 """)
 
             df_display = pd.DataFrame([{
