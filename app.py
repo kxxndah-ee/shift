@@ -595,12 +595,23 @@ def display_search_progress(
     return total_found
 
 
-def render_search_completion_indicator(total_records: int, total_reporters: int = 0, query_desc: str = ""):
+def render_search_completion_indicator(total_records: int, total_reporters: int = 0, query_desc: str = "", media_name: str = "", db = None):
     """
     검색 완료 후 상단에 탐색 완료 (100%) 상태를 상시 표시합니다.
+    언론사가 지정된 경우 해당 언론사의 실제 아카이브 보유 기간을 동적으로 표시합니다.
     """
     rep_txt = f" · 언론인 <b>{total_reporters}</b>명" if total_reporters > 0 else ""
     desc_txt = f" · '{query_desc}'" if query_desc else ""
+
+    arch_span_txt = "전체 아카이브 (2000년 ~ 2026년)"
+    if media_name and db:
+        try:
+            info = db.get_media_archive_info(media_name)
+            if info.get("is_specific_media"):
+                arch_span_txt = f"{info['media']} 아카이브 ({info['min_year']}년 ~ {info['max_year']}년)"
+        except Exception:
+            pass
+
     render_html(f"""
     <div style="display:flex; align-items:center; justify-content:space-between; margin-top:8px; margin-bottom:14px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:10px 16px;">
         <div style="display:flex; align-items:center; gap:10px;">
@@ -608,7 +619,7 @@ def render_search_completion_indicator(total_records: int, total_reporters: int 
             <span style="font-size:0.9rem; color:#1E293B; font-weight:600;">마스터 아카이브(67,000+건) 및 실시간 포털 탐색 완료{desc_txt}</span>
         </div>
         <div style="font-size:0.85rem; color:#64748B;">
-            총 <b>{total_records}</b>건 발령 기록 확인{rep_txt} · 전체 아카이브 (2000년 ~ 2026년)
+            총 <b>{total_records}</b>건 발령 기록 확인{rep_txt} · {arch_span_txt}
         </div>
     </div>
     """)
@@ -1360,7 +1371,12 @@ with tab_search:
             matched_reporters = [r for r in filtered_reporters if active_name in r["name"]] if filtered_reporters else [r for r in db.search_reporters(name=active_name) if active_name in r["name"] and not is_media_organization(r["name"]) and not is_excluded_department(r.get("current_dept", ""))]
         
         if matched_reporters:
-            render_search_completion_indicator(total_records=len(matched_records), total_reporters=len(matched_reporters), query_desc=active_name)
+            target_media = st.session_state.get("filter_mn_media_val", "")
+            if not target_media:
+                unique_medias = {r.get("current_media") for r in matched_reporters if r.get("current_media")}
+                if len(unique_medias) == 1:
+                    target_media = list(unique_medias)[0]
+            render_search_completion_indicator(total_records=len(matched_records), total_reporters=len(matched_reporters), query_desc=active_name, media_name=target_media, db=db)
             matched_reporters.sort(key=lambda x: (x.get("name", "") == active_name, str(x.get("last_seen", ""))), reverse=True)
             
             if len(matched_reporters) > 1:
@@ -1600,7 +1616,7 @@ with tab_search:
                 m_filter = st.session_state.get("filter_mn_media_val", "")
                 other_reps = [r for r in db.search_reporters(name=active_name) if not is_media_organization(r["name"]) and not is_excluded_department(r.get("current_dept", ""))]
                 if other_reps:
-                    render_search_completion_indicator(total_records=len(matched_records), total_reporters=len(other_reps), query_desc=active_name)
+                    render_search_completion_indicator(total_records=len(matched_records), total_reporters=len(other_reps), query_desc=active_name, media_name=m_filter, db=db)
                     other_medias = list(dict.fromkeys([r.get("current_media", "") for r in other_reps if r.get("current_media")]))
                     st.info(f"'{m_filter}' 소속의 '{active_name}' 기자 발령 기록은 확인되지 않았으나, 타 매체({', '.join(other_medias)}) 소속 기록({len(other_reps)}명)이 확인되어 안내합니다.")
 
@@ -1649,7 +1665,7 @@ with tab_search:
                         o_tl = other_timelines.get(o_rep["reporter_id"], [])
                         render_single_reporter_profile(o_rep, o_tl, db, key_suffix=f"other_{o_idx}")
                 else:
-                    render_search_completion_indicator(total_records=0, total_reporters=0, query_desc=f"{m_filter} {active_name}".strip())
+                    render_search_completion_indicator(total_records=0, total_reporters=0, query_desc=f"{m_filter} {active_name}".strip(), media_name=m_filter, db=db)
                     st.info(f"아카이브 전체 기간 온라인 공식 인사 기사에서 '{m_filter}' 소속 '{active_name}' 기자의 발령 기록을 찾지 못했습니다.")
             else:
                 render_search_completion_indicator(total_records=0, total_reporters=0, query_desc=active_name)
@@ -1663,14 +1679,14 @@ with tab_search:
 
         if not matched_records:
             target_kw = composite_title or " ".join(filter(None, [m_val, d_val, r_val]))
-            render_search_completion_indicator(total_records=0, total_reporters=0, query_desc=target_kw)
+            render_search_completion_indicator(total_records=0, total_reporters=0, query_desc=target_kw, media_name=m_val, db=db)
             st.info(f"조건에 부합하는 온라인 인사 발령 기록(아카이브 전체 기간)을 찾지 못했습니다: '{target_kw}'")
         else:
             unique_matched = MediaDatabase.deduplicate_timeline_records(matched_records, window_days=60, sort_desc=True)
             unique_matched = [r for r in unique_matched if not is_excluded_department(r.get("dept", ""))]
 
             target_kw = composite_title or " ".join(filter(None, [m_val, d_val, r_val]))
-            render_search_completion_indicator(total_records=len(unique_matched), total_reporters=len(filtered_reporters), query_desc=target_kw)
+            render_search_completion_indicator(total_records=len(unique_matched), total_reporters=len(filtered_reporters), query_desc=target_kw, media_name=m_val, db=db)
 
             if alt_search_note:
                 section_title = f"{m_val} {d_val} 발령 명단 (동일 부서 타 직급 포함)".strip()
@@ -1708,6 +1724,24 @@ with tab_search:
             promo_cnt = sum(1 for r in unique_matched if "승진" in r.get("action_type", ""))
             trans_cnt = sum(1 for r in unique_matched if any(k in r.get("action_type", "") for k in ["전보", "이동", "보임", "발령"]))
 
+            # 언론사별 실제 아카이브 보유 기간 메타데이터 조회
+            media_info = db.get_media_archive_info(m_val) if m_val else None
+            if media_info and media_info.get("is_specific_media"):
+                m_arch_min = media_info.get("min_year", "")
+                m_arch_max = media_info.get("max_year", "")
+                m_arch_count = media_info.get("count", 0)
+                is_filtered_subset = bool(d_val or r_val or (len(unique_matched) < m_arch_count))
+                arch_card_title = "매체 아카이브 기간"
+                arch_card_value = f"{m_arch_min} ~ {m_arch_max}년"
+                if is_filtered_subset and d_min and d_max:
+                    arch_card_sub = f"검색 발령: {d_min} ~ {d_max} ({len(unique_matched)}건)"
+                else:
+                    arch_card_sub = media_info.get("desc", "공식 인사 아카이브 전수 보유")
+            else:
+                arch_card_title = "검색 발령 발생 기간"
+                arch_card_value = f"{d_min} ~ {d_max}" if (d_min and d_max) else "전체 기간"
+                arch_card_sub = "통합 아카이브 (2000~2026) 대상 검색"
+
             kcol1, kcol2, kcol3, kcol4 = st.columns(4)
             with kcol1:
                 render_html(f"""
@@ -1728,9 +1762,9 @@ with tab_search:
             with kcol3:
                 render_html(f"""
                 <div class="metric-card">
-                    <div class="metric-label">데이터 추적 기간</div>
-                    <div class="metric-value" style="font-size:1.4rem;">{d_min} ~ {d_max}</div>
-                    <div class="metric-sub">공식 인사 아카이브</div>
+                    <div class="metric-label">{arch_card_title}</div>
+                    <div class="metric-value" style="font-size:1.35rem;">{arch_card_value}</div>
+                    <div class="metric-sub" title="{arch_card_sub}">{arch_card_sub}</div>
                 </div>
                 """)
             with kcol4:
@@ -1740,6 +1774,15 @@ with tab_search:
                     <div class="metric-value">{promo_cnt} / {trans_cnt}건</div>
                     <div class="metric-sub">인사 변동 내역</div>
                 </div>
+                """)
+
+            with st.expander("[안내] 언론사별 아카이브 추적 기간 및 수집 기준 안내"):
+                st.markdown("""
+                **왜 매체마다 아카이브 시작 연도가 다른가요?**
+                1. **언론사별 창간·개국 연도**: 매체의 실제 설립 연도 이전에는 인사 발령 데이터가 물리적으로 존재하지 않습니다.
+                   - 예: **뉴스1** (2011년 8월 창간), **종합편성채널 4사(JTBC·TV조선·채널A·MBN)** (2011년 12월 개국), **데일리안** (2004년 창간 / 2005년 최초 발령), **조선비즈** (2010년 5월 출범 / 2014년 독립 인사 분리), **딜사이트** (2018년 창간 / 2023년 분리).
+                2. **디지털 뉴스룸 및 포털의 공식 인사 기사 전산화 시점**: 국내 주요 일간지 및 방송사는 지면 기사의 인터넷 전산화 및 포털 인사 기사 공식 송고가 체계화된 **2000년대 초반(대부분 2004~2006년)**부터 공식 인사 보도자료를 연속 누락 없이 전수 수집 및 관리하고 있습니다.
+                3. **검색 조건 발령 발생 기간과의 구분**: 특정 부서나 직급(예: '건설부동산 부장')으로 검색했을 때 표시되는 일자 범위는 '해당 보직의 발령이 발생한 시점'이며, 매체 자체의 아카이브는 정상적으로 창간/전산화 이래 20년 이상 전 기간 보유 중입니다.
                 """)
 
             def _resolve_display_rank(rec, search_rank):
@@ -1878,6 +1921,8 @@ with tab_search:
             section_title = f"{mn_label} 발령 내역" if mn_label else "인사 소식"
             badge_title = f"아카이브 전체 기간 · 총 {len(unique_matched)}건"
 
+            render_search_completion_indicator(total_records=len(unique_matched), total_reporters=len(unique_matched), query_desc=mn_label, media_name=mn_m, db=db)
+
             render_html(f"""
             <div class="topic-section-divider"></div>
             <div class="topic-section-header">
@@ -1896,6 +1941,24 @@ with tab_search:
             d_max = max(dates)[:7] if dates else ""
             promo_cnt = sum(1 for r in unique_matched if "승진" in r.get("action_type", ""))
             trans_cnt = sum(1 for r in unique_matched if any(k in r.get("action_type", "") for k in ["전보", "이동", "보임", "발령"]))
+
+            # 언론사별 실제 아카이브 보유 기간 메타데이터 조회
+            media_info = db.get_media_archive_info(mn_m) if mn_m else None
+            if media_info and media_info.get("is_specific_media"):
+                m_arch_min = media_info.get("min_year", "")
+                m_arch_max = media_info.get("max_year", "")
+                m_arch_count = media_info.get("count", 0)
+                is_filtered_subset = bool(mn_n or (len(unique_matched) < m_arch_count))
+                arch_card_title = "매체 아카이브 기간"
+                arch_card_value = f"{m_arch_min} ~ {m_arch_max}년"
+                if is_filtered_subset and d_min and d_max:
+                    arch_card_sub = f"검색 발령: {d_min} ~ {d_max} ({len(unique_matched)}건)"
+                else:
+                    arch_card_sub = media_info.get("desc", "공식 인사 아카이브 전수 보유")
+            else:
+                arch_card_title = "검색 발령 발생 기간"
+                arch_card_value = f"{d_min} ~ {d_max}" if (d_min and d_max) else "전체 기간"
+                arch_card_sub = "통합 아카이브 (2000~2026) 대상 검색"
 
             kcol1, kcol2, kcol3, kcol4 = st.columns(4)
             with kcol1:
@@ -1917,9 +1980,9 @@ with tab_search:
             with kcol3:
                 render_html(f"""
                 <div class="metric-card">
-                    <div class="metric-label">데이터 추적 기간</div>
-                    <div class="metric-value" style="font-size:1.4rem;">{d_min} ~ {d_max}</div>
-                    <div class="metric-sub">공식 인사 아카이브</div>
+                    <div class="metric-label">{arch_card_title}</div>
+                    <div class="metric-value" style="font-size:1.35rem;">{arch_card_value}</div>
+                    <div class="metric-sub" title="{arch_card_sub}">{arch_card_sub}</div>
                 </div>
                 """)
             with kcol4:
@@ -1929,6 +1992,15 @@ with tab_search:
                     <div class="metric-value">{promo_cnt} / {trans_cnt}건</div>
                     <div class="metric-sub">인사 변동 내역</div>
                 </div>
+                """)
+
+            with st.expander("[안내] 언론사별 아카이브 추적 기간 및 수집 기준 안내"):
+                st.markdown("""
+                **왜 매체마다 아카이브 시작 연도가 다른가요?**
+                1. **언론사별 창간·개국 연도**: 매체의 실제 설립 연도 이전에는 인사 발령 데이터가 물리적으로 존재하지 않습니다.
+                   - 예: **뉴스1** (2011년 8월 창간), **종합편성채널 4사(JTBC·TV조선·채널A·MBN)** (2011년 12월 개국), **데일리안** (2004년 창간 / 2005년 최초 발령), **조선비즈** (2010년 5월 출범 / 2014년 독립 인사 분리), **딜사이트** (2018년 창간 / 2023년 분리).
+                2. **디지털 뉴스룸 및 포털의 공식 인사 기사 전산화 시점**: 국내 주요 일간지 및 방송사는 지면 기사의 인터넷 전산화 및 포털 인사 기사 공식 송고가 체계화된 **2000년대 초반(대부분 2004~2006년)**부터 공식 인사 보도자료를 연속 누락 없이 전수 수집 및 관리하고 있습니다.
+                3. **검색 조건 발령 발생 기간과의 구분**: 특정 부서나 직급(예: '건설부동산 부장')으로 검색했을 때 표시되는 일자 범위는 '해당 보직의 발령이 발생한 시점'이며, 매체 자체의 아카이브는 정상적으로 창간/전산화 이래 20년 이상 전 기간 보유 중입니다.
                 """)
 
             df_display = pd.DataFrame([{
